@@ -49,14 +49,16 @@ def draw_template(product_png, size, headline, discount, tagline, website, phone
     except:
         bold = med = small = def_font
 
-    # TOP badge
-    badge = Image.new("RGB", (300, 300), "#F4C542")
+# TOP badge  (FIXED ALPHA)
+    badge_size = 300
+    badge = Image.new("RGBA", (badge_size, badge_size), (0, 0, 0, 0))
     bdraw = ImageDraw.Draw(badge)
-    bdraw.ellipse([(0, 0), (300, 300)], fill="#F4C542")
-    bdraw.text((150, 120), discount, anchor="mm", font=bold, fill="white")
-    bdraw.text((150, 180), "OFF", anchor="mm", font=med, fill="white")
+    radius = badge_size // 2
+    bdraw.ellipse([(0, 0), (badge_size, badge_size)], fill=DEFAULTS["accent_yellow"] + (255,))
+    bdraw.text((radius, radius - 30), discount, anchor="mm", font=bold, fill="white")
+    bdraw.text((radius, radius + 30), "OFF", anchor="mm", font=med, fill="white")
     badge = badge.resize((180, 180), Image.LANCZOS)
-    img.paste(badge, (W - 200, 50), badge)
+    img.paste(badge, (W - 200, 50), badge)   # <- now safe
 
     # PRODUCT
     if product_png:
