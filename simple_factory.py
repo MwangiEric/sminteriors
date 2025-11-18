@@ -21,6 +21,15 @@ def free_caption(image_pil):
     inputs = proc(image_pil, return_tensors="pt")
     out = model.generate(**inputs)
     return proc.decode(out[0], skip_special_tokens=True)
+def free_remove_bg(image_pil):
+    buf = io.BytesIO()
+    image_pil.save(buf, format="PNG")
+    buf.seek(0)
+    r = requests.post("https://api.pixian.ai/remove", files={"image": ("in.png", buf, "image/png")})
+    if r.headers.get("Content-Type") != "image/png":
+        st.error(f"Pixian API error: {r.text[:200]}")
+        return image_pil  # fallback: return original
+    return Image.open(io.BytesIO(r.content))
 
 # ---------- usage inside Streamlit ----------
 uploaded = st.file_uploader("Product photo")
