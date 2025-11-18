@@ -1,5 +1,7 @@
-import requests, base64, io
-from PIL import Image
+import streamlit as st, os, tempfile, uuid, requests
+from PIL import Image, ImageDraw, ImageFont
+import io
+import zipfile
 
 def free_remove_bg(image_pil):
     """Pixian.AI  -  NO KEY, 50 free HD/day"""
