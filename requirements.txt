@@ -1,6 +1,6 @@
-streamlit
 Pillow
 numpy
 imageio
 imageio-ffmpeg
 requests
+mistralai==0.4.2
