@@ -54,7 +54,7 @@ def draw_template(product_png, size, headline, discount, tagline, website, phone
     badge = Image.new("RGBA", (badge_size, badge_size), (0, 0, 0, 0))
     bdraw = ImageDraw.Draw(badge)
     radius = badge_size // 2
-    bdraw.ellipse([(0, 0), (badge_size, badge_size)], fill=DEFAULTS["accent_yellow"] + (255,))
+bdraw.ellipse([(0, 0), (badge_size, badge_size)], fill=(244, 197, 66, 255))
     bdraw.text((radius, radius - 30), discount, anchor="mm", font=bold, fill="white")
     bdraw.text((radius, radius + 30), "OFF", anchor="mm", font=med, fill="white")
     badge = badge.resize((180, 180), Image.LANCZOS)
