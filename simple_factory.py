@@ -1,5 +1,5 @@
 import streamlit as st, io, requests, math, tempfile, base64, json, random, time
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
 import imageio.v3 as imageio
 
