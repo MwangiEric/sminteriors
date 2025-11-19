@@ -12,7 +12,8 @@ st.set_page_config(page_title="AdGen EVO: Dynamic Templates", layout="wide", pag
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
-LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
+# Logo URL should be stable and publicly accessible
+LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037" 
 
 # --- ASSETS ---
 MUSIC_TRACKS = {
@@ -26,7 +27,7 @@ if "groq_key" not in st.secrets:
     st.error("🚨 Missing Secret: Add `groq_key` to your .streamlit/secrets.toml")
     st.stop()
 
-# Groq API Endpoint
+# Groq API Endpoint & Headers
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 HEADERS = {
     "Authorization": f"Bearer {st.secrets['groq_key']}",
@@ -35,6 +36,7 @@ HEADERS = {
 
 # --- IMAGE PROCESSING ENGINE (Rembg + Enhance) ---
 def process_image_pro(input_image):
+    """Removes Background via Rembg and applies sharpness/contrast enhancements."""
     with st.spinner("🚿 Removing background & enhancing..."):
         img_byte_arr = io.BytesIO()
         input_image.save(img_byte_arr, format='PNG')
@@ -53,6 +55,7 @@ def process_image_pro(input_image):
 
 # --- FONTS (Stable Local) ---
 def get_font(size):
+    """Loads a common bold font from system paths for stability."""
     possible_fonts = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -66,15 +69,17 @@ def get_font(size):
 
 # --- MATH & ANIMATION ---
 def ease_out_elastic(t):
+    """Elastic easing function for animated entry."""
     c4 = (2 * math.pi) / 3
     return math.pow(2, -10 * t) * math.sin((t * 10 - 0.75) * c4) + 1 if t > 0 and t < 1 else (0 if t<=0 else 1)
 
 def linear_fade(t, start, duration):
+    """Linear fade in/out function."""
     if t < start: return 0.0
     if t > start + duration: return 1.0
     return (t - start) / duration
 
-# --- TEMPLATES (NEW: Inspired by user images, using brand colors) ---
+# --- TEMPLATES (Dynamic Brand Color Palettes) ---
 BRAND_PRIMARY = "#4C3B30" # Deep Brown
 BRAND_ACCENT = "#D2A544"  # Gold
 BRAND_TEXT_LIGHT = "#FFFFFF" # White
@@ -87,31 +92,32 @@ TEMPLATES = {
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
         "graphic_type": "none"
     },
-    "Brand Diagonal Slice": { # Inspired by Image 1 (yellow stripes)
-        "bg_grad": [BRAND_PRIMARY, "#3e2e24"], # Slightly different brown gradient
+    "Brand Diagonal Slice": { # Inspired by Image 1 (Diagonal stripes)
+        "bg_grad": [BRAND_PRIMARY, "#3e2e24"], 
         "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
         "graphic_type": "diagonal",
-        "graphic_color": BRAND_ACCENT # Gold stripes
+        "graphic_color": BRAND_ACCENT 
     },
-    "Brand Circular Flow": { # Inspired by Image 2 & 3 (orange circles)
+    "Brand Circular Flow": { # Inspired by Image 2 & 3 (Circles)
         "bg_grad": [BRAND_PRIMARY, "#332A22"], 
         "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
         "graphic_type": "circular",
-        "graphic_color": BRAND_ACCENT # Gold circles
+        "graphic_color": BRAND_ACCENT 
     },
-    "Brand Split Panel": { # Inspired by Image 4 (blue & yellow split)
-        "bg_grad": [BRAND_PRIMARY, BRAND_PRIMARY], # Solid background
+    "Brand Split Panel": { # Inspired by Image 4 (Bottom Panel)
+        "bg_grad": [BRAND_PRIMARY, BRAND_PRIMARY], 
         "accent": BRAND_TEXT_LIGHT, "text": BRAND_TEXT_LIGHT, 
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
         "graphic_type": "split",
-        "graphic_color": BRAND_ACCENT # Gold bottom panel
+        "graphic_color": BRAND_ACCENT 
     }
 }
 
 # --- GROQ AI LOGIC ---
 def ask_groq(payload):
+    """Sends payload to Groq API and handles response/errors."""
     try:
         r = requests.post(GROQ_URL, json=payload, headers=HEADERS, timeout=10)
         r.raise_for_status()
@@ -121,6 +127,8 @@ def ask_groq(payload):
         return None
 
 def get_data_groq(img_b64, model_name):
+    """Gets caption (Vision) and layout (Logic) from Groq."""
+    
     # 1. Vision Task (Llama 3.2 Vision Preview) for caption
     p_hook = {
         "model": "llama-3.2-11b-vision-preview",
@@ -137,17 +145,17 @@ def get_data_groq(img_b64, model_name):
         "model": "llama3-70b-8192",
         "messages": [
             {"role": "system", "content": "You are a JSON layout engine for 720x1280 video. Output JSON only."},
-            {"role": "user", "content": f"Create a JSON list of objects for layout. Each object must have 'role', 'x', 'y', 'w', 'h'. Roles needed: logo, product, price, contact, caption. Ensure all objects are visible and do not significantly overlap. Prioritize the product in the center. Product: {model_name}."}
+            {"role": "user", "content": f"Create a JSON list of objects for layout. Each object must have 'role', 'x', 'y', 'w', 'h'. Roles needed: logo, product, price, contact, caption. Prioritize the product in the center. Product: {model_name}."}
         ],
         "response_format": {"type": "json_object"}
     }
 
     caption = ask_groq(p_hook)
-    caption = caption.replace('"', '') if caption else "Elevate Your Space" # Better default
+    caption = caption.replace('"', '') if caption else "Elevate Your Space" 
     
     layout_raw = ask_groq(p_layout)
     
-    # Fallback Layout (if Groq fails or returns invalid JSON)
+    # Fallback Layout 
     default_layout = [
         {"role": "logo", "x": 50, "y": 50, "w": 200, "h": 100},
         {"role": "product", "x": 60, "y": 250, "w": 600, "h": 600},
@@ -160,7 +168,6 @@ def get_data_groq(img_b64, model_name):
         j = json.loads(layout_raw)
         final_layout = j.get("layout", j) if isinstance(j, dict) else j
         
-        # Simple validation: ensure it's a list and has required roles
         if isinstance(final_layout, list) and all("role" in item for item in final_layout):
             return caption, final_layout
         else:
@@ -168,24 +175,28 @@ def get_data_groq(img_b64, model_name):
     except:
         return caption, default_layout
 
-# --- RENDERING ---
+# --- RENDERING UTILITIES ---
 def draw_wrapped_text(draw, text, box, font, color, align="center"):
-    """Improved text wrapping with alignment"""
+    """Handles multi-line text wrapping within a bounding box."""
     lines = []
     words = text.split()
     line = ""
+    # Simplified word wrapping loop
     for w in words:
         test_line = line + " " + w if line else w
         bbox = draw.textbbox((0, 0), test_line, font=font)
-        if bbox[2] - bbox[0] > box['w'] and line: # Check width, but only if 'line' isn't empty
+        text_width = bbox[2] - bbox[0]
+        
+        if text_width > box['w'] and line: 
             lines.append(line)
             line = w
         else:
             line = test_line
     lines.append(line)
     
-    current_y = box['y'] # Start Y
+    current_y = box['y'] 
     
+    # Draw each line
     for l in lines:
         bbox = draw.textbbox((0,0), l, font=font)
         text_width = bbox[2] - bbox[0]
@@ -195,13 +206,12 @@ def draw_wrapped_text(draw, text, box, font, color, align="center"):
             lx = box['x'] + (box['w'] - text_width) // 2
         elif align == "left":
             lx = box['x']
-        elif align == "right":
-            lx = box['x'] + box['w'] - text_width
         
         draw.text((lx, current_y), l, font=font, fill=color)
         current_y += text_height + 5 # Line spacing
 
 def create_frame(t, img, boxes, texts, tpl_name):
+    """Draws a single animated frame of the video."""
     T = TEMPLATES[tpl_name]
     canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
@@ -219,12 +229,11 @@ def create_frame(t, img, boxes, texts, tpl_name):
     graphic_color_rgb = tuple(int(T["graphic_color"][i:i+2], 16) for i in (1, 3, 5)) if "graphic_color" in T else None
 
     if T["graphic_type"] == "diagonal" and graphic_color_rgb:
-        # Inspired by Image 1: Yellow diagonal stripes
-        diag_alpha = int(255 * linear_fade(t, 0.5, 1.0)) # Fade in
-        for i in range(-WIDTH, WIDTH + HEIGHT, 50): # Diagonal lines
+        # Diagonal stripes and solid block for text
+        diag_alpha = int(255 * linear_fade(t, 0.5, 1.0))
+        for i in range(-WIDTH, WIDTH + HEIGHT, 50): 
             draw.line([(i, 0), (i + HEIGHT, HEIGHT)], fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], diag_alpha), width=10)
         
-        # Add a solid diagonal block behind text (Image 1 style)
         if t > 0.8:
             solid_alpha = int(255 * linear_fade(t, 1.0, 0.5))
             draw.polygon([
@@ -233,8 +242,9 @@ def create_frame(t, img, boxes, texts, tpl_name):
 
 
     elif T["graphic_type"] == "circular" and graphic_color_rgb:
-        # Inspired by Image 2 & 3: Orange circles
+        # Animated circular shapes
         circle_alpha = int(255 * linear_fade(t, 0.8, 0.7))
+        
         # Large bottom-right circle
         circle_size = int(WIDTH * 1.5 * ease_out_elastic(max(0, t - 0.5)))
         cx, cy = int(WIDTH * 0.8), int(HEIGHT * 0.7)
@@ -244,16 +254,19 @@ def create_frame(t, img, boxes, texts, tpl_name):
         # Smaller top-left circle
         circle_size_small = int(WIDTH * 0.7 * ease_out_elastic(max(0, t - 1.0)))
         cx_s, cy_s = int(WIDTH * 0.2), int(HEIGHT * 0.3)
-        draw.ellipse([cx_s - circle_size_small//2, cy_s - circle_size_small//2, cx_s + circle_size_small//2, cy_s + circle_size_small//2], 
-                     fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_color[2], int(circle_alpha * 0.4)))
+        
+        # *** FIX APPLIED HERE ***
+        draw.ellipse([cx_s - circle_size_small//2, cy_s - circle_size_small//2, 
+                      cx_s + circle_size_small//2, cy_s + circle_size_small//2], 
+                     fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], int(circle_alpha * 0.4)))
 
 
     elif T["graphic_type"] == "split" and graphic_color_rgb:
-        # Inspired by Image 4: Blue background with yellow bottom strip
-        split_height = int(HEIGHT * 0.3 * ease_out_elastic(max(0, t - 1.0))) # Animate height
-        draw.rectangle([0, HEIGHT - split_height, WIDTH, HEIGHT], fill=T["graphic_color"]) # Bottom bar
+        # Bottom panel split
+        split_height = int(HEIGHT * 0.3 * ease_out_elastic(max(0, t - 1.0)))
+        draw.rectangle([0, HEIGHT - split_height, WIDTH, HEIGHT], fill=T["graphic_color"])
         
-        # Small decorative dots/pattern top-right (Image 4 style)
+        # Decorative dots (top-right)
         dot_fade = int(255 * linear_fade(t, 1.2, 0.5))
         dot_color = (graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], dot_fade)
         for i in range(5):
@@ -264,6 +277,7 @@ def create_frame(t, img, boxes, texts, tpl_name):
         role = b["role"]
         
         if role == "product":
+            # Floating product with shadow (Parallax effect)
             float_y = math.sin(t * 2) * 12
             scale = ease_out_elastic(min(t, 1.0))
             
@@ -271,6 +285,7 @@ def create_frame(t, img, boxes, texts, tpl_name):
                 pw, ph = int(b['w']*scale), int(b['h']*scale)
                 p_rs = img.resize((pw, ph), Image.LANCZOS)
                 
+                # Dynamic Drop Shadow
                 shadow = p_rs.copy()
                 shadow_data = [(0,0,0, int(a*0.3)) for r,g,b,a in p_rs.getdata()]
                 shadow.putdata(shadow_data)
@@ -288,12 +303,10 @@ def create_frame(t, img, boxes, texts, tpl_name):
                 off_y = (1-ease_out_elastic(anim))*100
                 draw.rounded_rectangle([b['x'], b['y']+off_y, b['x']+b['w'], b['y']+b['h']+off_y], radius=25, fill=T["price_bg"])
                 f = get_font(65)
-                # Ensure price text is dark if on light background, light if on dark background
-                price_text_color = T["price_text"] 
                 
                 draw_wrapped_text(draw, texts["price"], 
                                   {'x': b['x'], 'y': b['y']+off_y, 'w': b['w'], 'h': b['h']}, 
-                                  f, price_text_color)
+                                  f, T["price_text"])
                 
 
         elif role == "caption":
@@ -304,19 +317,19 @@ def create_frame(t, img, boxes, texts, tpl_name):
         elif role == "contact":
             if t > 2.5:
                 f = get_font(30)
-                draw_wrapped_text(draw, texts["contact"], b, f, T["text"]) # Align center by default
+                draw_wrapped_text(draw, texts["contact"], b, f, T["text"])
                 
         elif role == "logo":
              try:
                 logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
                 logo = logo.resize((b['w'], b['h']), Image.LANCZOS)
-                # Apply a slight shadow to logo to make it pop on complex backgrounds
+                # Logo with subtle shadow
                 logo_shadow = Image.new('RGBA', logo.size, (0,0,0,0))
                 logo_shadow_draw = ImageDraw.Draw(logo_shadow)
-                logo_shadow_draw.ellipse([5,5,logo.width-5,logo.height-5], fill=(0,0,0,100)) # Simple oval shadow
+                logo_shadow_draw.ellipse([5,5,logo.width-5,logo.height-5], fill=(0,0,0,100))
                 logo_shadow = logo_shadow.filter(ImageFilter.GaussianBlur(10))
 
-                canvas.paste(logo_shadow, (b['x']+5, b['y']+5), logo_shadow) # Offset shadow
+                canvas.paste(logo_shadow, (b['x']+5, b['y']+5), logo_shadow)
                 canvas.paste(logo, (b['x'], b['y']), logo)
              except: pass
 
@@ -338,7 +351,6 @@ with st.sidebar:
     u_price = st.text_input("Price", "Ksh 49,900")
     u_contact = st.text_input("Contact Info", "0710895737")
     
-    # Select from NEW templates
     u_style = st.selectbox("Design Template", list(TEMPLATES.keys()), index=0) 
     u_music = st.selectbox("Background Music", list(MUSIC_TRACKS.keys()))
     btn = st.button("🚀 Generate Ad Video", type="primary")
@@ -387,8 +399,7 @@ if btn and u_file:
         aclip = AudioFileClip(tf_name).subclip(0, DURATION).audio_fadeout(1)
         fclip = clip.set_audio(aclip)
     except Exception as e: 
-        st.warning(f"Audio failed ({e}), rendering silent video. Ensure you select a valid track.")
-        print(f"Audio Error: {e}")
+        st.warning(f"Audio failed, rendering silent video.")
         fclip = clip
 
     # 5. Finalize Video
