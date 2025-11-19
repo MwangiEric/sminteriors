@@ -7,20 +7,17 @@ st.set_page_config(page_title="S&M Canva Factory", layout="centered")
 st.title("🎬 Canva-Quality AI Ads")
 st.caption("Upload any photo → AI removes BG → writes hook → Canva animations → 6s MP4")
 
-# ---------- CONFIG ----------
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
 N_FRAMES = FPS * DURATION
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
 
-# ---------- Secrets ----------
 if "mistral_key" not in st.secrets:
     st.error("Add `mistral_key` in Secrets (free at console.mistral.ai)")
     st.stop()
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
-# ---------- HTTP helpers (no SDK) ----------
 def ask_mistral(payload):
     for attempt in range(1, 6):
         try:
@@ -52,13 +49,13 @@ def get_layout(model, price):
     payload = {
         "model": "mistral-large-latest",
         "messages": [{"role": "user", "content": f"""
-720×1280 canvas. Return ONLY this JSON (no extra text):
+720×1280 canvas. Return ONLY this JSON (no overlap):
 [{{"role":"logo","x":0,"y":0,"w":0,"h":0}},
  {{"role":"product","x":0,"y":0,"w":0,"h":0}},
  {{"role":"price","x":0,"y":0,"w":0,"h":0}},
  {{"role":"contact","x":0,"y":0,"w":0,"h":0}}]
 Product: {model} | Price: {price}
-Keep elements away from edges. Make it premium.
+Ensure **no overlap** between boxes. Keep 50 px margin.
 """}],
         "max_tokens": 400
     }
@@ -74,7 +71,6 @@ Keep elements away from edges. Make it premium.
             {"role": "contact", "x": 60,  "y": 1160,"w": 600, "h": 80}
         ]
 
-# ---------- Canva-like templates ----------
 TEMPLATES = {
     "Canva Pop": {
         "bg_grad": ["#071025", "#1e3fae"],
@@ -114,76 +110,35 @@ TEMPLATES = {
     }
 }
 
-# ---------- UI ----------
-col1, col2 = st.columns(2)
-with col1:
-    uploaded = st.file_uploader("Product photo (PNG/JPG)", type=["png", "jpg", "jpeg"])
-with col2:
-    model   = st.text_input("Product Name", "Modern Corner Sofa")
-    price   = st.text_input("Price", "KES 14,500")
-    contact = st.text_input("Contact", "0710 338 377 • sminteriors.co.ke")
-    template_choice = st.selectbox("Template", list(TEMPLATES.keys()))
-
-generate = st.button("Generate 6s Canva MP4", type="primary", use_container_width=True)
-
-# ---------- Helpers ----------
-def ease_out_bounce(t):
-    n1, d1 = 7.5625, 2.75
-    if t < 1 / d1: return n1 * t * t
-    elif t < 2 / d1:
-        t -= 1.5 / d1
-        return n1 * t * t + 0.75
-    elif t < 2.5 / d1:
-        t -= 2.25 / d1
-        return n1 * t * t + 0.9375
-    else:
-        t -= 2.625 / d1
-        return n1 * t * t + 0.984375
-
-def auto_fit_text(draw, text, x, y, w, h, start_size, color):
-    size = start_size
-    while size > 16:
-        font = ImageFont.load_default() if size < 20 else ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
-        lines = []
-        words = text.split()
-        line = ""
-        for wrd in words:
-            test = line + " " + wrd if line else wrd
-            if draw.textlength(test, font=font) <= w - 20:
-                line = test
-            else:
-                lines.append(line)
-                line = wrd
-        if line:
-            lines.append(line)
-        line_h = size + 4
-        total_h = len(lines) * line_h
-        if total_h <= h - 10:
-            y_off = y + (h - total_h) // 2
-            for ln in lines:
-                lx = x + (w - draw.textlength(ln, font=font)) // 2
-                draw.text((lx, y_off), ln.upper(), fill=color, font=font, stroke_width=2, stroke_fill="black")
-                y_off += line_h
-            break
-        size -= 2
-
 # ---------- Remove BG (free) ----------
 def remove_bg(pil_im):
-    # 1. remove BG
     buf = io.BytesIO()
     pil_im.save(buf, format="PNG")
     buf.seek(0)
     r = requests.post("https://api.pixian.ai/remove", files={"image": ("in.png", buf, "image/png")})
     if r.headers.get("Content-Type") != "image/png":
         return pil_im  # fallback
-    transparent = Image.open(io.BytesIO(r.content))
+    return Image.open(io.BytesIO(r.content))
 
-    # 2. upscale 4×
-    buf2 = io.BytesIO()
-    transparent.save(buf2, format="PNG")
-    buf2.seek(0)
-    out = replicate.run("nightmareai/real-esrgan:latest", input={"image": buf2, "scale": 4})
-    return Image.open(requests.get(out, stream=True).raw)
+# ---------- Proportional logo ----------
+def proportional_resize(im, max_h):
+    aspect = im.width / im.height
+    new_h = max_h
+    new_w = int(aspect * new_h)
+    return im.resize((new_w, new_h), Image.LANCZOS)
+
+# ---------- Animated background ----------
+def draw_circles(draw, t, template):
+    T = TEMPLATES[template]
+    n = 8
+    for i in range(n):
+        angle = t * 0.3 + i * 0.8
+        x = int(WIDTH // 2 + math.cos(angle) * 400)
+        y = int(HEIGHT * 0.5 + math.sin(angle) * 300)
+        r = 20 + i * 6
+        alpha = int(255 * (0.15 - i * 0.01))
+        color = T["accent"] + f"{alpha:02x}"
+        draw.ellipse([(x - r, y - r), (x + r, y + r)], fill=color)
 
 # ---------- Draw one frame (RGBA → RGB) ----------
 def draw_frame(t, img, boxes, price, contact, caption, template):
@@ -205,11 +160,11 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
         offset = int(T["parallax"] * WIDTH * math.sin(t * math.pi / DURATION))
         canvas.paste(bg, (offset, int(HEIGHT * 0.22)), bg.convert("RGBA"))
 
-    # 3. Logo (Canva shadow + pulse)
+    # 3. Logo (proportional + shadow)
     logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
     for b in boxes:
         if b["role"] == "logo":
-            logo = logo.resize((b["w"], b["h"]), Image.LANCZOS)
+            logo = proportional_resize(logo, b["h"])
             if T["shadow"]:
                 shadow = logo.copy()
                 shadow = shadow.filter(ImageFilter.GaussianBlur(6))
@@ -218,7 +173,7 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 4. Product (Canva bounce + shadow)
     for b in boxes:
-        if b["role"] == "product":
+        if b["role"] == "product"]:
             scale = 0.94 + 0.06 * ease_out_bounce(t / DURATION)
             w2, h2 = int(b["w"] * scale), int(b["h"] * scale)
             prod = img.resize((w2, h2), Image.LANCZOS)
@@ -232,20 +187,18 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 5. Price (Canva badge + bounce)
     for b in boxes:
-        if b["role"] == "price":
+        if b["role"] == "price"]:
             bounce = int(10 * ease_out_bounce((t % 1) / 1))
             draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=20, fill=T["price_bg"])
             draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=T["price_text"], anchor="mm", font_size=T["price_size"])
 
     # 6. Contact (Canva style)
     for b in boxes:
-        if b["role"] == "contact":
+        if b["role"] == "contact"]:
             draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2), contact, fill=T["text"], anchor="mm", font_size=T["contact_size"])
 
-    # 7. Caption (auto-fit inside AI box)
-    for b in boxes:
-        if b["role"] == "caption":
-            auto_fit_text(draw, caption, b["x"], b["y"], b["w"], b["h"], T["caption_size"], T["text"])
+    # 7. Animated circles (free)
+    draw_circles(draw, t, template)
 
     # --- DROP ALPHA → RGB only ---
     rgb = np.array(canvas)[:, :, :3]
@@ -274,11 +227,4 @@ if generate:
         frames = [draw_frame(i / FPS, img, boxes, price, contact, caption, template_choice) for i in range(DURATION * FPS)]
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        imageio.imwrite(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
-        video_path = tmp.name
-
-    st.video(video_path)
-    with open(video_path, "rb") as f:
-        st.download_button("Download Canva MP4", f, f"{model.replace(' ', '_')}_canva.mp4", "video/mp4")
-
-    st.balloons()
+        imageio.imwrite(tmp.name, frames, fps=FPS, codec="libxrap
