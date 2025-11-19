@@ -213,7 +213,7 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 5. Price (Canva badge + bounce)
     for b in boxes:
-        if b["role"] == "price"]:
+        if b["role"] == "price":
             bounce = int(10 * ease_out_bounce((t % 1) / 1))
             draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=20, fill=T["price_bg"])
             draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=T["price_text"], anchor="mm", font_size=T["price_size"])
