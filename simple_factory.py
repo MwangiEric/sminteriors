@@ -3,9 +3,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
 import imageio.v3 as imageio
 
-st.set_page_config(page_title="S&M Canva Ads", layout="centered")
-st.title("🎬 S&M Interiors × Canva-Quality AI Ads")
-st.caption("Upload product → AI writes hook + designs layout → 6s TikTok MP4 in seconds")
+st.set_page_config(page_title="S&M Canva Factory", layout="centered")
+st.title("🎬 Canva-Quality AI Ads")
+st.caption("Upload any photo → AI removes BG → writes hook → Canva animations → 6s MP4")
 
 # ---------- CONFIG ----------
 WIDTH, HEIGHT = 720, 1280
@@ -117,15 +117,14 @@ TEMPLATES = {
 # ---------- UI ----------
 col1, col2 = st.columns(2)
 with col1:
-    uploaded = st.file_uploader("Product image (PNG or JPG)", type=["png", "jpg", "jpeg"])
-
+    uploaded = st.file_uploader("Product photo (PNG/JPG)", type=["png", "jpg", "jpeg"])
 with col2:
     model   = st.text_input("Product Name", "Modern Corner Sofa")
     price   = st.text_input("Price", "KES 14,500")
     contact = st.text_input("Contact", "0710 338 377 • sminteriors.co.ke")
     template_choice = st.selectbox("Template", list(TEMPLATES.keys()))
 
-generate = st.button("Generate 6s AI Video", type="primary", use_container_width=True)
+generate = st.button("Generate 6s Canva MP4", type="primary", use_container_width=True)
 
 # ---------- Helpers ----------
 def ease_out_bounce(t):
@@ -168,6 +167,24 @@ def auto_fit_text(draw, text, x, y, w, h, start_size, color):
             break
         size -= 2
 
+# ---------- Remove BG (free) ----------
+def remove_bg(pil_im):
+    # 1. remove BG
+    buf = io.BytesIO()
+    pil_im.save(buf, format="PNG")
+    buf.seek(0)
+    r = requests.post("https://api.pixian.ai/remove", files={"image": ("in.png", buf, "image/png")})
+    if r.headers.get("Content-Type") != "image/png":
+        return pil_im  # fallback
+    transparent = Image.open(io.BytesIO(r.content))
+
+    # 2. upscale 4×
+    buf2 = io.BytesIO()
+    transparent.save(buf2, format="PNG")
+    buf2.seek(0)
+    out = replicate.run("nightmareai/real-esrgan:latest", input={"image": buf2, "scale": 4})
+    return Image.open(requests.get(out, stream=True).raw)
+
 # ---------- Draw one frame (RGBA → RGB) ----------
 def draw_frame(t, img, boxes, price, contact, caption, template):
     T = TEMPLATES[template]
@@ -201,7 +218,7 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 4. Product (Canva bounce + shadow)
     for b in boxes:
-        if b["role"] == "product":
+        if b["role"] == "product"]:
             scale = 0.94 + 0.06 * ease_out_bounce(t / DURATION)
             w2, h2 = int(b["w"] * scale), int(b["h"] * scale)
             prod = img.resize((w2, h2), Image.LANCZOS)
@@ -215,19 +232,19 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 5. Price (Canva badge + bounce)
     for b in boxes:
-        if b["role"] == "price":
+        if b["role"] == "price"]:
             bounce = int(10 * ease_out_bounce((t % 1) / 1))
             draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=20, fill=T["price_bg"])
             draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=T["price_text"], anchor="mm", font_size=T["price_size"])
 
     # 6. Contact (Canva style)
     for b in boxes:
-        if b["role"] == "contact":
+        if b["role"] == "contact"]:
             draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2), contact, fill=T["text"], anchor="mm", font_size=T["contact_size"])
 
     # 7. Caption (auto-fit inside AI box)
     for b in boxes:
-        if b["role"] == "caption":
+        if b["role"] == "caption"]:
             auto_fit_text(draw, caption, b["x"], b["y"], b["w"], b["h"], T["caption_size"], T["text"])
 
     # --- DROP ALPHA → RGB only ---
