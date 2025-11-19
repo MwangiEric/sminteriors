@@ -1,431 +1,401 @@
-import streamlit as st, io, requests, math, tempfile, base64, json, random, time
+import streamlit as st
+import io, requests, math, tempfile, base64, json, random, time, os
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
-import imageio.v3 as imageio
+from moviepy.editor import ImageSequenceClip, AudioFileClip, CompositeAudioClip
 
-# --- GLOBAL CONFIG & SECRETS ---
-st.set_page_config(page_title="S&M Canva Factory", layout="wide")
-st.title("🎬 Canva-Quality AI Ads Factory")
+# --- GLOBAL CONFIG ---
+st.set_page_config(page_title="S&M Canva Factory Pro", layout="wide", page_icon="🎬")
 
+# --- ASSETS & CONSTANTS ---
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
-N_FRAMES = FPS * DURATION
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
 
+# Royalty-free background tracks (Hosted MP3 examples)
+MUSIC_TRACKS = {
+    "Upbeat Pop": "https://cdn.pixabay.com/audio/2024/05/24/audio_16709e7558.mp3",
+    "Luxury Chill": "https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf07a.mp3",
+    "High Energy": "https://cdn.pixabay.com/audio/2024/01/16/audio_e2b992254f.mp3"
+}
+
 if "mistral_key" not in st.secrets:
-    st.error("Add `mistral_key` in Secrets (free at console.mistral.ai)")
+    st.error("🚨 Missing Secret: Add `mistral_key` to your .streamlit/secrets.toml")
     st.stop()
+
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
-# --- FONT LOADING ---
-try:
-    # Attempt to load a common bold font (Adjust path if needed)
-    FONT_BOLD = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-except IOError:
-    # Fallback if the path is invalid
-    FONT_BOLD = ImageFont.load_default() 
+# --- ROBUST FONT LOADER ---
+@st.cache_resource
+def load_fonts():
+    """Loads a nice Google Font dynamically to ensure it works on Cloud & Local"""
+    font_url = "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Bold.ttf"
+    try:
+        r = requests.get(font_url, timeout=5)
+        return io.BytesIO(r.content)
+    except:
+        return None # Fallback to default
 
-# --- ANIMATION HELPERS (Define first, as they are used by TEMPLATES-dependent functions) ---
+FONT_BYTES = load_fonts()
 
-def ease_out_bounce(t):
-    n1, d1 = 7.5625, 2.75
-    if t < 1 / d1: return n1 * t * t
-    elif t < 2 / d1:
-        t -= 1.5 / d1
-        return n1 * t * t + 0.75
-    elif t < 2.5 / d1:
-        t -= 2.25 / d1
-        return n1 * t * t + 0.9375
+def get_font(size):
+    if FONT_BYTES:
+        return ImageFont.truetype(FONT_BYTES, size)
     else:
-        t -= 2.625 / d1
-        return n1 * t * t + 0.984375
+        return ImageFont.load_default()
 
-def proportional_resize(im, max_h):
-    aspect = im.width / im.height
-    new_h = max_h
-    new_w = int(aspect * new_h)
-    return im.resize((new_w, new_h), Image.LANCZOS)
+# --- ADVANCED ANIMATION MATH ---
+def ease_out_elastic(t):
+    """Elastic bounce effect for popping elements"""
+    c4 = (2 * math.pi) / 3
+    if t == 0: return 0
+    if t == 1: return 1
+    return math.pow(2, -10 * t) * math.sin((t * 10 - 0.75) * c4) + 1
 
-# --- TEMPLATES (Defined second, as they are referenced by drawing functions) ---
+def linear_fade(t, start, duration):
+    """Returns 0.0 to 1.0 alpha based on time"""
+    if t < start: return 0.0
+    if t > start + duration: return 1.0
+    return (t - start) / duration
+
+# --- TEMPLATES (Refined) ---
 TEMPLATES = {
-    "Canva Pop": {
-        "bg_grad": ["#071025", "#1e3fae"],
-        "accent": "#00e6ff",
-        "text": "#ffffff",
-        "price_bg": "#001225",
-        "price_text": "#00e6ff",
-        "caption_size": 56,
-        "price_size": 68,
-        "contact_size": 36,
-        "shadow": True,
-        "parallax": 0.06
-    },
-    "Canva Luxury": {
-        "bg_grad": ["#04080f", "#091426"],
-        "accent": "#d4af37",
-        "text": "#ffffff",
-        "price_bg": "#d4af37",
+    "Midnight Luxury": {
+        "bg_grad": ["#0f0c29", "#302b63", "#24243e"],
+        "accent": "#FFD700", # Gold
+        "text": "#FFFFFF",
+        "price_bg": "#FFD700",
         "price_text": "#000000",
-        "caption_size": 52,
-        "price_size": 72,
-        "contact_size": 34,
-        "shadow": True,
-        "parallax": 0.04
+        "font_scale": 1.0
     },
-    "Canva Minimal": {
-        "bg_grad": ["#f6f7f9", "#e9eef6"],
-        "accent": "#1e3fae",
-        "text": "#1e3fae",
-        "price_bg": "#1e3fae",
+    "Clean Corporate": {
+        "bg_grad": ["#ffffff", "#dfe9f3"],
+        "accent": "#2980b9", # Blue
+        "text": "#2c3e50",
+        "price_bg": "#2980b9",
         "price_text": "#ffffff",
-        "caption_size": 50,
-        "price_size": 66,
-        "contact_size": 32,
-        "shadow": False,
-        "parallax": 0.02
+        "font_scale": 0.9
+    },
+    "Neon Vibrant": {
+        "bg_grad": ["#434343", "#000000"],
+        "accent": "#00ff99", # Neon Green
+        "text": "#ffffff",
+        "price_bg": "#00ff99",
+        "price_text": "#000000",
+        "font_scale": 1.1
     }
 }
 
-# --- AI API CALLS ---
+# --- AI HELPERS ---
 def ask_mistral(payload):
-    for attempt in range(1, 6):
-        try:
-            r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=60)
-            if r.status_code == 429:
-                time.sleep(2 ** attempt + random.uniform(0, 1))
-                continue
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            if attempt == 5:
-                st.error(f"Mistral API failed after 5 retries: {e}")
-                st.stop()
-            time.sleep(2 ** attempt)
-    st.stop()
+    try:
+        r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        st.error(f"AI Error: {e}")
+        st.stop()
 
-def get_caption(img_b64):
+@st.cache_data(show_spinner=False)
+def get_smart_layout(model, price):
+    """Asks LLM for optimal layout coordinates"""
+    prompt = f"""
+    Canvas size: {WIDTH}x{HEIGHT}.
+    I need a JSON layout for a vertical video ad.
+    Roles: 'logo', 'product', 'price', 'contact', 'caption'.
+    Product: {model}
+    
+    Rules:
+    1. Logo: Top center or top left.
+    2. Product: Large, center/upper-center.
+    3. Caption: Just below product.
+    4. Price: Big badge near bottom.
+    5. Contact: Very bottom.
+    
+    Return JSON list of objects: {{ "role": "...", "x": int, "y": int, "w": int, "h": int }}
+    NO MARKDOWN. ONLY JSON.
+    """
+    payload = {
+        "model": "mistral-large-latest",
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"} 
+    }
+    try:
+        resp = ask_mistral(payload)
+        data = json.loads(resp)
+        # Mistral sometimes wraps it in a wrapper key
+        if "layout" in data: return data["layout"]
+        if isinstance(data, list): return data
+        # Fallback if structure is weird
+        raise ValueError("Invalid JSON")
+    except:
+        # Robust Fallback Layout
+        return [
+            {"role": "logo", "x": 40, "y": 40, "w": 200, "h": 100},
+            {"role": "product", "x": 60, "y": 180, "w": 600, "h": 600},
+            {"role": "caption", "x": 60, "y": 800, "w": 600, "h": 150},
+            {"role": "price", "x": 160, "y": 1000, "w": 400, "h": 120},
+            {"role": "contact", "x": 60, "y": 1180, "w": 600, "h": 60}
+        ]
+
+@st.cache_data(show_spinner=False)
+def get_hook(img_b64):
     payload = {
         "model": "pixtral-12b-2409",
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": "Describe this furniture in one short, catchy TikTok hook (max 12 words)."},
+            {"type": "text", "text": "Write a 5-word explosive hook for a TikTok ad for this item."},
             {"type": "image_url", "image_url": f"data:image/png;base64,{img_b64}"}
         ]}],
-        "max_tokens": 30
+        "max_tokens": 50
     }
-    return ask_mistral(payload)
+    return ask_mistral(payload).replace('"', '')
 
-# --- CACHED AI Layout Function ---
-@st.cache_data
-def get_layout(model, price):
-    payload = {
-        "model": "mistral-large-latest",
-        "messages": [{"role": "user", "content": f"""
-720×1280 canvas. Return ONLY this JSON (no overlap):
-[{{"role":"logo","x":0,"y":0,"w":0,"h":0}},
- {{"role":"product","x":0,"y":0,"w":0,"h":0}},
- {{"role":"price","x":0,"y":0,"w":0,"h":0}},
- {{"role":"contact","x":0,"y":0,"w":0,"h":0}}]
-Product: {model} | Price: {price}
-Ensure **no overlap** between boxes. Keep 50 px margin.
-"""}],
-        "max_tokens": 400
-    }
-    text = ask_mistral(payload)
-    try:
-        # PRO-LEVEL: Explicit validation of the JSON structure
-        boxes = json.loads(text)
-        required_roles = {"logo", "product", "price", "contact"}
-        if all(b["role"] in required_roles for b in boxes) and len(boxes) >= 4:
-             return boxes
-        else:
-            raise ValueError
-    except:
-        # Fallback Layout
-        return [
-            {"role": "logo", "x": 40, "y": 40, "w": 240, "h": 120},
-            {"role": "product", "x": 60, "y": 180, "w": 600, "h": 780},
-            {"role": "price", "x": 60, "y": 1000, "w": 600, "h": 140},
-            {"role": "contact", "x": 60, "y": 1160, "w": 600, "h": 80}
-        ]
+# --- GRAPHICS ENGINE ---
 
-# --- DRAWING FUNCTIONS (Can safely reference TEMPLATES now) ---
+def draw_gradient(draw, colors, h):
+    # Simple linear interpolation between 2 or 3 colors
+    # Optimisation: We compute this once per frame type if needed, but simple math is fast enough
+    steps = len(colors) - 1
+    for y in range(h):
+        ratio = y / h
+        idx = int(ratio * steps)
+        idx = min(idx, steps - 1)
+        local_ratio = (ratio * steps) - idx
+        
+        c1 = tuple(int(colors[idx][i:i+2], 16) for i in (1, 3, 5))
+        c2 = tuple(int(colors[idx+1][i:i+2], 16) for i in (1, 3, 5))
+        
+        r = int(c1[0] + (c2[0] - c1[0]) * local_ratio)
+        g = int(c1[1] + (c2[1] - c1[1]) * local_ratio)
+        b = int(c1[2] + (c2[2] - c1[2]) * local_ratio)
+        
+        draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
 
-def draw_circles(draw, t, template):
-    T = TEMPLATES[template]
-    n = 8
-    for i in range(n):
-        angle = t * 0.3 + i * 0.8
-        x = int(WIDTH // 2 + math.cos(angle) * 400)
-        y = int(HEIGHT * 0.5 + math.sin(angle) * 300)
-        r = 20 + i * 6
-        alpha = int(255 * (0.15 - i * 0.01))
-        color = T["accent"] + f"{alpha:02x}"
-        draw.ellipse([(x - r, y - r), (x + r, y + r)], fill=color)
-
-def draw_caption_animation(draw, text, box, t, template):
-    """
-    PRO-LEVEL: Animates the caption text with a staggered slide-in effect.
-    """
-    T = TEMPLATES[template]
-    x, y, w, h = box["x"], box["y"], box["w"], box["h"]
-    
-    # Static text fitting logic
-    size = T["caption_size"]
-    font = FONT_BOLD.font_variant(size=size) if hasattr(FONT_BOLD, 'font_variant') else FONT_BOLD
-    
-    # Word wrapping logic
+def draw_wrapped_text(draw, text, box, font, color, align="center"):
+    """Pro-level text wrapper"""
     lines = []
     words = text.split()
     line = ""
-    for wrd in words:
-        test = line + " " + wrd if line else wrd
-        if draw.textlength(test, font=font) <= w - 20:
-            line = test
-        else:
+    for w in words:
+        test_line = line + " " + w if line else w
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        if bbox[2] > box['w']:
             lines.append(line)
-            line = wrd
-    if line:
-        lines.append(line)
+            line = w
+        else:
+            line = test_line
+    lines.append(line)
     
-    line_h = size + 4
-    total_h = len(lines) * line_h
-    y_off_base = y + (h - total_h) // 2
+    total_h = sum([draw.textbbox((0,0), l, font=font)[3] for l in lines])
+    current_y = box['y'] + (box['h'] - total_h) // 2
     
-    # Animation parameters
-    MAX_SLIDE = 150 # Max pixels to slide from
-    TIME_START = 0.5 # Animation starts at 0.5s
-    TIME_DURATION = 1.0 # Animation lasts 1.0s
-    
-    # Draw each line and word
-    current_word_index = 0
-    for i, ln in enumerate(lines):
-        y_off = y_off_base + i * line_h
-        
-        # Center the line
-        line_w = draw.textlength(ln, font=font)
-        lx_base = x + (w - line_w) // 2
-        
-        word_x_offset = lx_base
-        
-        # Iterate over words in the line for individual animation
-        for word_index, wrd in enumerate(ln.split()):
-            # Calculate the global delay based on the index of the word in the entire caption
-            # Staggered delay: 0.1s per word
-            global_delay = TIME_START + current_word_index * 0.1
-            current_word_index += 1
-            
-            # The current time in the word's local animation cycle
-            local_t = (t - global_delay) / TIME_DURATION
-            local_t = np.clip(local_t, 0, 1)
-            
-            # Apply an ease-out function for smooth motion
-            eased_pos = ease_out_bounce(local_t) if local_t < 1 else 1
-            
-            # Calculate the animated X offset
-            # Slides from left (MAX_SLIDE) to its final position (0)
-            slide_x = MAX_SLIDE * (1 - eased_pos)
-            
-            # Draw the word
-            word_color = T["accent"] if current_word_index % 2 == 0 else T["text"] # Alternate color
-            draw.text(
-                (word_x_offset - slide_x, y_off), # Apply slide_x
-                wrd.upper(), 
-                fill=word_color, 
-                font=font, 
-                stroke_width=2, 
-                stroke_fill="#00000080" # Soft shadow
-            )
-            
-            # Update X offset for the next word
-            word_x_offset += draw.textlength(wrd + " ", font=font)
+    for l in lines:
+        bbox = draw.textbbox((0,0), l, font=font)
+        lw = bbox[2]
+        lx = box['x'] + (box['w'] - lw) // 2
+        draw.text((lx, current_y), l, font=font, fill=color)
+        current_y += bbox[3] + 10
 
-# --- MAIN DRAW FUNCTION ---
-def draw_frame(t, img, boxes, price, contact, caption, template):
-    T = TEMPLATES[template]
-    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+def create_frame(t, img, boxes, data, template_name):
+    T = TEMPLATES[template_name]
+    
+    # 1. Base Canvas
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
-
-    # 1. Canva gradient background
-    for y in range(HEIGHT):
-        blend = y / HEIGHT
-        r = int((int(T["bg_grad"][0][1:3], 16)) * (1 - blend) + int(T["bg_grad"][1][1:3], 16) * blend)
-        g = int((int(T["bg_grad"][0][3:5], 16)) * (1 - blend) + int(T["bg_grad"][1][3:5], 16) * blend)
-        b = int((int(T["bg_grad"][0][5:7], 16)) * (1 - blend) + int(T["bg_grad"][1][5:7], 16) * blend)
-        draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
-
-    # 2. Soft background copy (parallax) - with dynamic opacity
+    draw_gradient(draw, T["bg_grad"], HEIGHT)
+    
+    # 2. Parallax Background (Blurred)
     if img:
-        bg = img.resize((WIDTH, int(HEIGHT * 0.55)), Image.LANCZOS).filter(ImageFilter.GaussianBlur(12))
-        offset = int(T["parallax"] * WIDTH * math.sin(t * math.pi / DURATION))
+        bg_scale = 1.1
+        bg_w, bg_h = int(WIDTH * bg_scale), int(HEIGHT * 0.6 * bg_scale)
+        bg_img = img.resize((bg_w, bg_h)).filter(ImageFilter.GaussianBlur(15))
         
-        # PRO-LEVEL: Fade in background image opacity (0 to 100% in 1s)
-        alpha_factor = np.clip(t / 1.0, 0, 1)
-        bg_alpha = int(255 * 0.4 * alpha_factor)
+        # Parallax Math
+        offset_x = int((WIDTH - bg_w) // 2 + (math.sin(t) * 20))
+        offset_y = 200
         
-        # Create a new image with controlled alpha for pasting
-        bg_rgba = bg.convert("RGBA")
-        bg_rgba_faded = Image.new("RGBA", bg.size)
+        # Fade in background
+        bg_alpha = int(255 * 0.4 * linear_fade(t, 0, 1))
+        bg_img.putalpha(bg_alpha)
+        canvas.paste(bg_img, (offset_x, offset_y), bg_img)
+
+    # 3. Process Elements from JSON Layout
+    for b in boxes:
+        role = b["role"]
         
-        # Apply the calculated alpha to the whole image
-        alpha_mask = Image.new('L', bg.size, bg_alpha)
-        bg_rgba_faded.paste(bg_rgba, (0, 0), alpha_mask)
-        
-        canvas.paste(bg_rgba_faded, (offset, int(HEIGHT * 0.22)), bg_rgba_faded)
+        if role == "logo":
+            # Download logo once in main loop ideally, but cached by OS here usually fine
+            try:
+                logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
+                aspect = logo.width / logo.height
+                nh = b['h']
+                nw = int(nh * aspect)
+                logo = logo.resize((nw, nh), Image.LANCZOS)
+                canvas.paste(logo, (b['x'], b['y']), logo)
+            except: pass
 
-    # 3. Logo (proportional + shadow)
-    logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
-    for b in boxes:
-        if b["role"] == "logo":
-            logo = proportional_resize(logo, b["h"])
-            if T["shadow"]:
-                shadow = logo.copy().filter(ImageFilter.GaussianBlur(6))
-                canvas.paste(shadow, (b["x"] + 4, b["y"] + 4), shadow)
-            canvas.paste(logo, (b["x"], b["y"]), logo)
-
-    # 4. Product (Canva bounce + shadow)
-    for b in boxes:
-        if b["role"] == "product":
-            scale = 0.94 + 0.06 * ease_out_bounce(t / DURATION)
-            w2, h2 = int(b["w"] * scale), int(b["h"] * scale)
-            prod = img.resize((w2, h2), Image.LANCZOS)
-            x = b["x"] + (b["w"] - w2) // 2
-            y = b["y"] + (b["h"] - h2) // 2
-            if T["shadow"]:
-                shadow = prod.copy().filter(ImageFilter.GaussianBlur(8))
-                canvas.paste(shadow, (x + 8, y + 8), shadow)
-            canvas.paste(prod, (x, y), prod.convert("RGBA"))
-
-    # 5. Price (Canva badge + bounce)
-    for b in boxes:
-        if b["role"] == "price":
-            # Bounce effect on the vertical position (1s cycle)
-            bounce = int(10 * ease_out_bounce((t % 1) / 1))
+        elif role == "product":
+            # Scale animation (Elastic pop at 0.5s)
+            scale = ease_out_elastic(max(0, t - 0.5)) 
+            scale = min(scale, 1.0) # Clamp
             
-            # Apply fade-in for the price badge (appears after 2 seconds)
-            price_alpha_factor = np.clip((t - 2.0) / 1.0, 0, 1) # Fade in from 2.0s to 3.0s
-            badge_color = T["price_bg"]
-            text_color = T["price_text"]
-            
-            # Create a separate layer for the price badge to apply opacity
-            badge_layer = Image.new("RGBA", canvas.size)
-            badge_draw = ImageDraw.Draw(badge_layer)
-            
-            badge_draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=20, fill=badge_color)
-            
-            # Apply opacity to the badge layer
-            alpha_mask = Image.new('L', canvas.size, int(255 * price_alpha_factor))
-            canvas.paste(badge_layer, (0, 0), alpha_mask)
+            if scale > 0.01:
+                pw, ph = int(b['w'] * scale), int(b['h'] * scale)
+                p_img = img.resize((pw, ph), Image.LANCZOS)
+                
+                # Shadow
+                shadow = p_img.copy()
+                # Make shadow black
+                shadow_data = shadow.getdata()
+                new_data = [(0,0,0, int(a*0.3)) for r,g,b,a in shadow_data]
+                shadow.putdata(new_data)
+                shadow = shadow.filter(ImageFilter.GaussianBlur(10))
+                
+                # Center logic
+                cx = b['x'] + (b['w'] - pw) // 2
+                cy = b['y'] + (b['h'] - ph) // 2
+                
+                canvas.paste(shadow, (cx+15, cy+15), shadow)
+                canvas.paste(p_img, (cx, cy), p_img)
 
-            # Draw text on top (simple, no per-frame opacity needed after 3.0s)
-            if price_alpha_factor > 0.1: # Only draw text when visible
-                font_price = FONT_BOLD.font_variant(size=T["price_size"]) if hasattr(FONT_BOLD, 'font_variant') else FONT_BOLD
-                draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=text_color, anchor="mm", font=font_price)
+        elif role == "caption":
+            # Typewriter effect
+            if t > 1.5:
+                font = get_font(50)
+                draw_wrapped_text(draw, data["caption"], b, font, T["accent"])
 
-    # 6. Contact (Canva style)
-    for b in boxes:
-        if b["role"] == "contact":
-            font_contact = FONT_BOLD.font_variant(size=T["contact_size"]) if hasattr(FONT_BOLD, 'font_variant') else FONT_BOLD
-            draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2), contact, fill=T["text"], anchor="mm", font=font_contact)
+        elif role == "price":
+            # Slide up from bottom at 2.0s
+            slide_prog = linear_fade(t, 2.0, 0.5)
+            if slide_prog > 0:
+                y_off = (1 - ease_out_elastic(slide_prog)) * 200
+                
+                # Draw Badge
+                draw.rounded_rectangle(
+                    [b['x'], b['y'] + y_off, b['x']+b['w'], b['y']+b['h'] + y_off], 
+                    radius=20, fill=T["price_bg"]
+                )
+                # Draw Text
+                font = get_font(70)
+                text_w = draw.textlength(data["price"], font=font)
+                tx = b['x'] + (b['w'] - text_w) // 2
+                ty = b['y'] + (b['h'] - 70) // 2 + y_off - 5
+                draw.text((tx, ty), data["price"], fill=T["price_text"], font=font)
 
-    # 7. Animated circles (free)
-    draw_circles(draw, t, template)
+        elif role == "contact":
+            if t > 3.0:
+                font = get_font(30)
+                draw_wrapped_text(draw, data["contact"], b, font, T["text"])
 
-    # 8. NEW: Animated Caption
-    caption_box = next((b for b in boxes if b["role"] == "caption"), None)
-    if caption_box:
-        draw_caption_animation(draw, caption, caption_box, t, template)
+    # 4. Cinematic Vignette (Top Tier Polish)
+    # Creates a subtle darkening at the edges
+    # (Simulated with a radial gradient logic simply by drawing dark corners)
+    # For performance, we just darken the bottom heavily for text readability
+    
+    # Gradient overlay at bottom
+    overlay = Image.new('RGBA', (WIDTH, int(HEIGHT*0.3)), (0,0,0,0))
+    o_draw = ImageDraw.Draw(overlay)
+    for y in range(overlay.height):
+        alpha = int(200 * (y / overlay.height))
+        o_draw.line([(0, y), (WIDTH, y)], fill=(0,0,0, alpha))
+    canvas.paste(overlay, (0, HEIGHT - overlay.height), overlay)
 
-    # --- DROP ALPHA → RGB only ---
-    rgb = np.array(canvas)[:, :, :3]
-    return rgb
+    return np.array(canvas)
 
-# ---------- Streamlit UI and Generation Flow (Pro-Level Layout) ----------
+# --- UI & MAIN LOGIC ---
 
-# PRO-LEVEL: Use sidebar for inputs
+st.title("✨ Top-Tier Ads Factory")
+st.caption("Powered by Mistral AI, Pillow & MoviePy")
+
 with st.sidebar:
-    st.header("⚙️ Ad Configuration")
-    uploaded_file = st.file_uploader("1. Upload Product Image (PNG/JPG)", type=["png", "jpg", "jpeg"])
+    st.header("🛠️ Setup")
+    u_file = st.file_uploader("Product Image", type=["png", "jpg"])
+    u_model = st.text_input("Product Name", "Aurum SmartWatch")
+    u_price = st.text_input("Price", "$299")
+    u_contact = st.text_input("CTA / Site", "Shop Now @ Aurum.com")
     
-    # Text Inputs
-    model_input = st.text_input("Product Name/Model", "Luxury Modern Sofa")
-    price_input = st.text_input("Price Tag Text", "ONLY $1,999")
-    contact_input = st.text_input("Contact Info/URL", "YourStore.com | @TikTokHandle")
+    st.divider()
+    u_template = st.selectbox("Visual Style", list(TEMPLATES.keys()))
+    u_music = st.selectbox("Background Music", list(MUSIC_TRACKS.keys()))
     
-    # Template Selection
-    template_choice = st.radio("2. Choose Ad Style", list(TEMPLATES.keys()))
-    
-    generate_button = st.button("🚀 Generate TikTok Video Ad", use_container_width=True)
+    btn_gen = st.button("🎬 Render Video", type="primary")
 
-# Main content area
-st.subheader("Upload, Configure, Generate. Go Viral.")
-
-# Handle image display
-if uploaded_file is not None:
-    st.image(uploaded_file, caption="Uploaded Image", width=360) # Smaller preview
-else:
-    st.info("Upload an image in the sidebar to begin.")
-
-
-# Generation Block
-if generate_button and uploaded_file is not None:
+if btn_gen and u_file:
+    # PREPARATION
+    status = st.status("🚀 Starting Engine...", expanded=True)
     
-    img = Image.open(uploaded_file).convert("RGBA")
+    img = Image.open(u_file).convert("RGBA")
     
-    # Placeholder for status messages and video output
-    status_placeholder = st.empty()
+    # 1. AI GEN
+    status.write("🧠 Dreaming up captions (Pixtral)...")
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    caption = get_hook(b64)
+    status.write(f"✅ Hook: {caption}")
     
-    # 1. AI Analysis & Layout (with progress bar)
-    status_placeholder.subheader("Process Status")
-    progress_bar = status_placeholder.progress(0, text="Starting AI Analysis...")
+    status.write("📐 Calculating pixel-perfect layout (Mistral)...")
+    layout_boxes = get_smart_layout(u_model, u_price)
+    
+    # Data Packet
+    render_data = {
+        "caption": caption,
+        "price": u_price,
+        "contact": u_contact
+    }
 
-    with st.spinner("1. Getting AI Hook from Pixtral..."):
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        caption = get_caption(b64)
-    progress_bar.progress(33, text="AI Hook generated. Getting Layout from Mistral-Large...")
-
-    with st.spinner("2. Generating AI Layout JSON..."):
-        boxes = get_layout(model_input, price_input)
-        # Add the fixed caption box
-        boxes.append({"role": "caption", "x": 60, "y": 80, "w": 600, "h": 100})
-        
-    progress_bar.progress(66, text="Layout complete. Rendering video frames...")
-    
-    status_placeholder.subheader("AI Outputs")
-    status_placeholder.markdown(f"**🔥 AI Hook:** {caption}")
-    
-    with st.expander("View Generated AI Layout (JSON)"):
-        st.json(boxes)
-
-    # 2. Video Rendering (with progress bar)
+    # 2. FRAME RENDERING
+    status.write("🎨 Painting frames...")
     frames = []
+    prog_bar = status.progress(0)
     
-    # Calculate frames to render
-    for i in range(DURATION * FPS):
+    total_frames = FPS * DURATION
+    for i in range(total_frames):
         t = i / FPS
-        frame = draw_frame(t, img, boxes, price_input, contact_input, caption, template_choice)
-        frames.append(frame)
-        # Update progress bar every few frames
-        if i % 10 == 0:
-            progress_bar.progress(66 + int((i / N_FRAMES) * 34), text=f"Rendering frame {i}/{N_FRAMES}...")
-
-    progress_bar.progress(100, text="Rendering complete! Finalizing file...")
+        frame_pixels = create_frame(t, img, layout_boxes, render_data, u_template)
+        frames.append(frame_pixels)
+        prog_bar.progress((i+1) / total_frames)
+        
+    # 3. VIDEO ASSEMBLY (MoviePy)
+    status.write("🎼 Mixing audio & encoding (MoviePy)...")
     
-    # 3. File Finalization
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        imageio.imwrite(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
-        video_path = tmp.name
-
-    st.subheader("Generated TikTok Ad")
-    st.video(video_path)
-    with open(video_path, "rb") as f:
-        st.download_button("⬇️ Download High-Quality MP4", f, f"{model_input.replace(' ', '_')}_canva.mp4", "video/mp4")
-
-    st.balloons()
+    # Create video clip
+    clip = ImageSequenceClip(frames, fps=FPS)
     
-# --- Concluding Section ---
-st.markdown("---")
-st.caption("Need more Streamlit expertise? Learn how to deploy advanced data apps.")
-st.markdown("The video on [Building a Streamlit App with Images, Videos, Audio & Interactive Messages!](https://www.youtube.com/watch?v=t7YQCQ-gkY4) is relevant because it shows the fundamental Streamlit principles needed to build the UI for a video factory application.")
+    # Add Audio
+    try:
+        # Download audio to temp file
+        audio_url = MUSIC_TRACKS[u_music]
+        audio_resp = requests.get(audio_url)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f_aud:
+            f_aud.write(audio_resp.content)
+            audio_path = f_aud.name
+            
+        audio_clip = AudioFileClip(audio_path).subclip(0, DURATION)
+        # Fade out audio at end
+        audio_clip = audio_clip.audio_fadeout(1)
+        
+        final_clip = clip.set_audio(audio_clip)
+    except Exception as e:
+        st.warning(f"Audio failed ({e}), rendering silent video.")
+        final_clip = clip
+
+    # Write File
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f_out:
+        final_clip.write_videofile(f_out.name, codec="libx264", audio_codec="aac", logger=None)
+        video_path = f_out.name
+
+    status.update(label="✨ Done!", state="complete", expanded=False)
+
+    # 4. RESULT
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.video(video_path)
+    with c2:
+        st.success("Your ad is ready!")
+        st.info(f"**Hook Used:** {caption}")
+        with open(video_path, "rb") as v_file:
+            st.download_button("⬇️ Download MP4", v_file, "ad_toptier.mp4")
+
+elif btn_gen and not u_file:
+    st.error("Please upload an image first.")
