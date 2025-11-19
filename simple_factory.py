@@ -3,126 +3,138 @@ from PIL import Image, ImageDraw
 import numpy as np
 import imageio
 
-st.set_page_config(page_title="S&M Mistral Layout", layout="centered")
-st.title("🎬 Mistral AI Layout + 6s Video")
+st.set_page_config(page_title="S&M Mistral Ads", layout="centered")
+st.title("S&M Interiors × Mistral AI")
+st.caption("Upload product → AI writes hook + designs layout → 6s TikTok MP4 in seconds")
 
 # ---------- CONFIG ----------
 WIDTH, HEIGHT = 720, 1280
-FPS, DURATION = 30, 6
-N_FRAMES = DURATION * FPS
-BRAND_NAVY = "#001F54"
-BRAND_GOLD = "#D4AF37"
-BRAND_WHITE = "#FFFFFF"
+FPS = 30
+DURATION = 6
+N_FRAMES = FPS * DURATION
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
 
-# ---------- MISTRAL ----------
+# ---------- Secrets ----------
 if "mistral_key" not in st.secrets:
-    st.error("Add mistral_key to Secrets (https://console.mistral.ai → free tier)"); st.stop()
+    st.error("Add `mistral_key` in Secrets (free at console.mistral.ai)")
+    st.stop()
+HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
-from mistralai.client import MistralClient
-from mistralai.models.chat_completion import ChatMessage
+# ---------- HTTP helpers ----------
+def ask_mistral(payload):
+    r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=60)
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
 
-client = MistralClient(api_key=st.secrets["mistral_key"])
+def get_caption(img_b64):
+    payload = {
+        "model": "pixtral-12b-2409",
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "Describe this furniture in one short, catchy TikTok hook (max 12 words)."},
+            {"type": "image_url", "image_url": f"data:image/png;base64,{img_b64}"}
+        ]}],
+        "max_tokens": 30
+    }
+    return ask_mistral(payload)
 
-def mistral_caption(img_b64):
-    msgs = [ChatMessage(role="user", content=[
-        {"type": "text", "text": "Describe this furniture in one catchy sentence for a TikTok ad (≤15 words)."},
-        {"type": "image_url", "image_url": f"data:image/png;base64,{img_b64}"}
-    ])]
-    resp = client.chat(model="pixtral-12b-2409", messages=msgs)
-    return resp.choices[0].message.content.strip()
-
-def mistral_layout(model, price):
-    msgs = [ChatMessage(role="user", text=f"""
-Canvas 720×1280 px.
-Elements: logo, product image, price text, contact text.
-Return ONLY a JSON list:
-[{{"role":"logo","x":int,"y":int,"w":int,"h":int}},
- {{"role":"product","x":int,"y":int,"w":int,"h":int}},
- {{"role":"price","x":int,"y":int,"w":int,"h":int}},
- {{"role":"contact","x":int,"y":int,"w":int,"h":int}}]
-Model: {model}, Price: {price}.
-Avoid centre-safe-zone (100 px margin).
-""")]
-    resp = client.chat(model="mistral-large-latest", messages=msgs)
-    return json.loads(resp.choices[0].message.content)
+def get_layout(model, price):
+    payload = {
+        "model": "mistral-large-latest",
+        "messages": [{"role": "user", "content": f"""
+720×1280 canvas. Return ONLY this JSON (no extra text):
+[{{"role":"logo","x":0,"y":0,"w":0,"h":0}},
+ {{"role":"product","x":0,"y":0,"w":0,"h":0}},
+ {{"role":"price","x":0,"y":0,"w":0,"h":0}},
+ {{"role":"contact","x":0,"y":0,"w":0,"h":0}}]
+Product: {model} | Price: {price}
+Keep elements away from edges. Make it premium.
+"""}],
+        "max_tokens": 400
+    }
+    text = ask_mistral(payload)
+    try:
+        return json.loads(text)
+    except:
+        # fallback grid
+        return [
+            {"role": "logo",    "x": 40,  "y": 40,  "w": 240, "h": 120},
+            {"role": "product", "x": 60,  "y": 180, "w": 600, "h": 780},
+            {"role": "price",   "x": 60,  "y": 1000,"w": 600, "h": 140},
+            {"role": "contact", "x": 60,  "y": 1160,"w": 600, "h": 80}
+        ]
 
 # ---------- UI ----------
 uploaded = st.file_uploader("Product PNG (transparent best)", type=["png"])
-model   = st.text_input("Product name", "Modern Corner Sofa")
-price   = st.text_input("Price", "KES 14 500")
-contact = st.text_input("Contact", "0710 338 377 | sminteriors.co.ke")
-generate = st.button("Generate AI Layout + 6s MP4", type="primary")
+model   = st.text_input("Product Name", "Modern Corner Sofa")
+price   = st.text_input("Price", "KES 14,500")
+contact = st.text_input("Contact", "0710 338 377 • sminteriors.co.ke")
+generate = st.button("Generate 6s AI Video", type="primary", use_container_width=True)
 
-# ---------- DRAW ----------
-def draw_frame(t, img, boxes, price, contact):
-    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+# ---------- Draw one frame ----------
+def draw_frame(t, img, boxes, price, contact, caption):
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(canvas)
 
-    # navy → gold gradient
+    # Navy → gold gradient
     for y in range(HEIGHT):
         blend = y / HEIGHT
-        r = int((0x00) * (1 - blend) + 0xD4 * blend)
-        g = int((0x1F) * (1 - blend) + 0xAF * blend)
-        b = int((0x54) * (1 - blend) + 0x37 * blend)
+        r = int(0 + 212 * blend)
+        g = int(31 + 168 * blend)
+        b = int(84 - 47 * blend)
         draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
 
-    # logo (AI coords)
     logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
     for b in boxes:
         if b["role"] == "logo":
-            logo = logo.resize((b["w"], b["h"]), Image.LANCZOS)
-            canvas.paste(logo, (b["x"], b["y"]), logo)
+            logo_resized = logo.resize((b["w"], b["h"]))
+            canvas.paste(logo_resized, (b["x"], b["y"]), logo_resized)
 
-    # product (AI coords + pulse)
-    for b in boxes:
         if b["role"] == "product":
-            scale = 0.9 + 0.1 * math.sin(t * 2 * math.pi / 6)
-            w, h = int(b["w"] * scale), int(b["h"] * scale)
-            prod = img.resize((w, h), Image.LANCZOS)
-            x = b["x"] + (b["w"] - w) // 2
-            y = b["y"] + (b["h"] - h) // 2
-            canvas.paste(prod, (x, y), prod.convert("RGBA"))
+            scale = 0.94 + 0.06 * math.sin(t * math.pi * 2 / DURATION)
+            w2 = int(b["w"] * scale)
+            h2 = int(b["h"] * scale)
+            prod = img.resize((w2, h2))
+            canvas.paste(prod, (b["x"] + (b["w"]-w2)//2, b["y"] + (b["h"]-h2)//2), prod)
 
-    # price (AI coords + bounce)
-    for b in boxes:
         if b["role"] == "price":
-            bounce = int(10 * math.sin(t * 3 * math.pi / 6))
-            draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=18, fill=BRAND_GOLD)
-            draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=BRAND_WHITE, anchor="mm", size=44)
+            bounce = 10 * math.sin(t * 3 * math.pi / DURATION)
+            draw.rounded_rectangle([b["x"], b["y"]+bounce, b["x"]+b["w"], b["y"]+b["h"]+bounce], radius=20, fill="#D4AF37")
+            draw.text((b["x"]+b["w"]//2, b["y"]+b["h"]//2+bounce), price, fill="white", anchor="mm", font_size=68)
 
-    # contact (AI coords)
-    for b in boxes:
         if b["role"] == "contact":
-            draw.text((b["x"], b["y"] + b["h"] // 2), contact, fill=BRAND_WHITE, size=30)
+            draw.text((b["x"]+b["w"]//2, b["y"]+b["h"]//2), contact, fill="white", anchor="mm", font_size=36)
 
+    # Caption at top
+    draw.text((WIDTH//2, 100), caption.upper(), fill="white", anchor="mt", font_size=56, stroke_width=3, stroke_fill="black")
     return np.array(canvas)
 
-def make_6s_video(img, model, price, contact):
-    # AI layout
-    with st.spinner("AI choosing layout…"):
-        caption = mistral_caption(base64.b64encode(img.tobytes()).decode())
-        boxes = mistral_layout(model, price)
-    st.success("AI caption: " + caption)
-    st.json(boxes)
-
-    # frames
-    frames = []
-    for i in range(N_FRAMES):
-        t = i / FPS
-        frame = draw_frame(t, img, boxes, price, contact)
-        frames.append(frame)
-
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        imageio.mimsave(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
-        return tmp.name, caption
-
-# ---------- RUN ----------
+# --- Generate ---
 if generate:
     if not uploaded:
-        st.error("Upload product PNG"); st.stop()
-    im = Image.open(uploaded)
-    tmp_path, ai_caption = make_6s_video(im, model, price, contact)
-    st.video(tmp_path)
-    with open(tmp_path, "rb") as f:
-        st.download_button("⬇️ AI-layout MP4", data=f, file_name="sm_ai_layout.mp4", mime="video/mp4")
+        st.error("Upload a product image first!")
+        st.stop()
+
+    img = Image.open(uploaded).convert("RGBA")
+
+    with st.spinner("AI thinking..."):
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        caption = get_caption(b64)
+        boxes = get_layout(model, price)
+
+    st.success(f"AI Hook: **{caption}**")
+    st.json(boxes)
+
+    with st.spinner("Rendering video..."):
+        frames = [draw_frame(i/FPS, img, boxes, price, contact, caption) for i in range(DURATION * FPS)]
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        imageio.imwrite(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
+        video_path = tmp.name
+
+    st.video(video_path)
+    with open(video_path, "rb") as f:
+        st.download_button("Download MP4", f, f"{model.replace(' ', '_')}_ad.mp4", "video/mp4")
+
+    st.balloons()
