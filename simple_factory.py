@@ -197,8 +197,6 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
                 shadow = shadow.filter(ImageFilter.GaussianBlur(6))
                 canvas.paste(shadow, (b["x"] + 4, b["y"] + 4), shadow)
             canvas.paste(logo, (b["x"], b["y"]), logo)
-
-    # 4. Product (Canva bounce + shadow)
     # 4. Product (Canva bounce + shadow)
     for b in boxes:
         if b["role"] == "product":
