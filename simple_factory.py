@@ -6,13 +6,12 @@ from moviepy.editor import ImageSequenceClip, AudioFileClip
 from rembg import remove
 
 # --- GLOBAL CONFIGURATION ---
-st.set_page_config(page_title="AdGen EVO: Dynamic Templates", layout="wide", page_icon="✨")
+st.set_page_config(page_title="AdGen EVO: Content & Ads", layout="wide", page_icon="✨")
 
 # --- CONSTANTS ---
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
-# Logo URL should be stable and publicly accessible
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037" 
 
 # --- ASSETS ---
@@ -175,13 +174,48 @@ def get_data_groq(img_b64, model_name):
     except:
         return caption, default_layout
 
-# --- RENDERING UTILITIES ---
+# =========================================================================
+# === NEW CONTENT GENERATION LOGIC ===
+
+def generate_tips(content_type, keyword="interior design"):
+    """Generates a list of content ideas (tips) using Groq."""
+    
+    system_prompt = f"""You are a content creation expert for a luxury home furnishing brand named 'SM Interiors'. 
+    Your tone must be authoritative, engaging, and suitable for short-form video content (TikTok/Reels).
+    Respond using only markdown bullet points. Do not include any introductory or concluding sentences."""
+    
+    if content_type == "DIY Tips":
+        user_prompt = f"Generate 5 quick, actionable DIY home decor tips or furniture restoration ideas that use common materials, focusing on high-impact visuals suitable for a video tutorial. The focus keyword is '{keyword}'."
+    elif content_type == "Furniture Tips":
+        user_prompt = f"Generate 5 high-value tips on how to properly care for, arrange, or choose high-end furniture (like the '{keyword}' product). Focus on luxury, longevity, and placement."
+    elif content_type == "Interior Design Tips":
+        user_prompt = f"Generate 5 creative and trending interior design tips or small-space hacks related to the theme of '{keyword}'. Focus on quick visual improvements and style."
+    else:
+        return "*Select a content type to generate ideas.*"
+
+    payload = {
+        "model": "llama3-70b-8192",  # High-quality writing model
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.8,
+        "max_tokens": 1024
+    }
+    
+    # Display loading while generating
+    with st.spinner(f"🧠 Groq is generating {content_type} ideas..."):
+        return ask_groq(payload)
+
+# === END NEW CONTENT GENERATION LOGIC ===
+# =========================================================================
+
+
+# --- RENDERING UTILITIES (No change needed here) ---
 def draw_wrapped_text(draw, text, box, font, color, align="center"):
-    """Handles multi-line text wrapping within a bounding box."""
     lines = []
     words = text.split()
     line = ""
-    # Simplified word wrapping loop
     for w in words:
         test_line = line + " " + w if line else w
         bbox = draw.textbbox((0, 0), test_line, font=font)
@@ -196,7 +230,6 @@ def draw_wrapped_text(draw, text, box, font, color, align="center"):
     
     current_y = box['y'] 
     
-    # Draw each line
     for l in lines:
         bbox = draw.textbbox((0,0), l, font=font)
         text_width = bbox[2] - bbox[0]
@@ -208,7 +241,7 @@ def draw_wrapped_text(draw, text, box, font, color, align="center"):
             lx = box['x']
         
         draw.text((lx, current_y), l, font=font, fill=color)
-        current_y += text_height + 5 # Line spacing
+        current_y += text_height + 5 
 
 def create_frame(t, img, boxes, texts, tpl_name):
     """Draws a single animated frame of the video."""
@@ -229,7 +262,6 @@ def create_frame(t, img, boxes, texts, tpl_name):
     graphic_color_rgb = tuple(int(T["graphic_color"][i:i+2], 16) for i in (1, 3, 5)) if "graphic_color" in T else None
 
     if T["graphic_type"] == "diagonal" and graphic_color_rgb:
-        # Diagonal stripes and solid block for text
         diag_alpha = int(255 * linear_fade(t, 0.5, 1.0))
         for i in range(-WIDTH, WIDTH + HEIGHT, 50): 
             draw.line([(i, 0), (i + HEIGHT, HEIGHT)], fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], diag_alpha), width=10)
@@ -242,31 +274,25 @@ def create_frame(t, img, boxes, texts, tpl_name):
 
 
     elif T["graphic_type"] == "circular" and graphic_color_rgb:
-        # Animated circular shapes
         circle_alpha = int(255 * linear_fade(t, 0.8, 0.7))
         
-        # Large bottom-right circle
         circle_size = int(WIDTH * 1.5 * ease_out_elastic(max(0, t - 0.5)))
         cx, cy = int(WIDTH * 0.8), int(HEIGHT * 0.7)
         draw.ellipse([cx - circle_size//2, cy - circle_size//2, cx + circle_size//2, cy + circle_size//2], 
                      fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], int(circle_alpha * 0.6)))
         
-        # Smaller top-left circle
         circle_size_small = int(WIDTH * 0.7 * ease_out_elastic(max(0, t - 1.0)))
         cx_s, cy_s = int(WIDTH * 0.2), int(HEIGHT * 0.3)
         
-        # *** FIX APPLIED HERE ***
         draw.ellipse([cx_s - circle_size_small//2, cy_s - circle_size_small//2, 
                       cx_s + circle_size_small//2, cy_s + circle_size_small//2], 
                      fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], int(circle_alpha * 0.4)))
 
 
     elif T["graphic_type"] == "split" and graphic_color_rgb:
-        # Bottom panel split
         split_height = int(HEIGHT * 0.3 * ease_out_elastic(max(0, t - 1.0)))
         draw.rectangle([0, HEIGHT - split_height, WIDTH, HEIGHT], fill=T["graphic_color"])
         
-        # Decorative dots (top-right)
         dot_fade = int(255 * linear_fade(t, 1.2, 0.5))
         dot_color = (graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], dot_fade)
         for i in range(5):
@@ -277,7 +303,6 @@ def create_frame(t, img, boxes, texts, tpl_name):
         role = b["role"]
         
         if role == "product":
-            # Floating product with shadow (Parallax effect)
             float_y = math.sin(t * 2) * 12
             scale = ease_out_elastic(min(t, 1.0))
             
@@ -285,7 +310,6 @@ def create_frame(t, img, boxes, texts, tpl_name):
                 pw, ph = int(b['w']*scale), int(b['h']*scale)
                 p_rs = img.resize((pw, ph), Image.LANCZOS)
                 
-                # Dynamic Drop Shadow
                 shadow = p_rs.copy()
                 shadow_data = [(0,0,0, int(a*0.3)) for r,g,b,a in p_rs.getdata()]
                 shadow.putdata(shadow_data)
@@ -323,7 +347,6 @@ def create_frame(t, img, boxes, texts, tpl_name):
              try:
                 logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
                 logo = logo.resize((b['w'], b['h']), Image.LANCZOS)
-                # Logo with subtle shadow
                 logo_shadow = Image.new('RGBA', logo.size, (0,0,0,0))
                 logo_shadow_draw = ImageDraw.Draw(logo_shadow)
                 logo_shadow_draw.ellipse([5,5,logo.width-5,logo.height-5], fill=(0,0,0,100))
@@ -344,20 +367,63 @@ def create_frame(t, img, boxes, texts, tpl_name):
     return np.array(canvas)
 
 # --- MAIN UI ---
+
+# Initialize session state for content display management
+if 'show_content' not in st.session_state:
+    st.session_state.show_content = False
+
 with st.sidebar:
-    st.header("⚡ Turbo Settings")
-    u_file = st.file_uploader("Product Image", type=["jpg", "png"])
+    st.header("⚡ Turbo Ad Generator")
+    u_file = st.file_uploader("1. Product Image", type=["jpg", "png"])
     u_model = st.text_input("Product Name", "Walden Media Console")
     u_price = st.text_input("Price", "Ksh 49,900")
     u_contact = st.text_input("Contact Info", "0710895737")
     
     u_style = st.selectbox("Design Template", list(TEMPLATES.keys()), index=0) 
     u_music = st.selectbox("Background Music", list(MUSIC_TRACKS.keys()))
-    btn = st.button("🚀 Generate Ad Video", type="primary")
+    btn_ad = st.button("🚀 Generate Ad Video", type="primary")
 
-st.title("AdGen EVO: Dynamic Brand Ads")
+    st.markdown("---")
+    
+    # === NEW: CONTENT GENERATOR SECTION ===
+    st.header("💡 Content Idea Generator")
+    u_content_type = st.radio(
+        "Select Content Type:",
+        ["DIY Tips", "Furniture Tips", "Interior Design Tips"]
+    )
+    u_content_keyword = st.text_input("Content Focus (e.g., 'Small living room')", value="Mid-Century Console")
+    btn_content = st.button("🧠 Generate Tips")
+    
+st.title("AdGen EVO: Dynamic Brand Ads & Content")
 
-if btn and u_file:
+# --- EXECUTION LOGIC ---
+
+# 1. CONTENT GENERATION LOGIC
+if btn_content:
+    # Set flag to show content results, not video
+    st.session_state.show_content = True
+    st.session_state.content_type = u_content_type
+    st.session_state.content_keyword = u_content_keyword
+
+if st.session_state.show_content and btn_content:
+    # Display results in the main area
+    st.subheader(f"✨ Top 5 {st.session_state.content_type} on: *{st.session_state.content_keyword}*")
+    
+    generated_text = generate_tips(st.session_state.content_type, st.session_state.content_keyword)
+    
+    if generated_text:
+        st.markdown(generated_text)
+        st.success("Use these points as script ideas for your next TikTok/Reel!")
+    else:
+        st.error("Could not retrieve tips. Check your Groq key or try again.")
+    
+    st.markdown("---")
+    st.session_state.show_content = False # Reset flag
+
+# 2. VIDEO AD GENERATION LOGIC
+if btn_ad and u_file:
+    # Set flag to prioritize video output
+    st.session_state.show_content = False
     status = st.status("Initializing AI & Design Engine...", expanded=True)
     
     # 1. Background Removal & Enhancement
@@ -412,5 +478,5 @@ if btn and u_file:
     with open(final_path, "rb") as f:
         st.download_button("Download Ad", f, "ad_dynamic_brand.mp4")
 
-elif btn:
+elif btn_ad:
     st.error("Please upload a product image to start!")
