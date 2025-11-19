@@ -1,7 +1,7 @@
-import streamlit as st, io, requests, math, tempfile, base64, json
+import streamlit as st, io, requests, math, tempfile, base64, json, re, time
 from PIL import Image, ImageDraw
 import numpy as np
-import imageio
+import imageio.v3 as imageio
 
 st.set_page_config(page_title="S&M Mistral Ads", layout="centered")
 st.title("S&M Interiors × Mistral AI")
@@ -21,24 +21,18 @@ if "mistral_key" not in st.secrets:
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
 # ---------- HTTP helpers ----------
-import time, random
-
 def ask_mistral(payload):
-    for attempt in range(1, 6):          # 5 tries
+    for attempt in range(1, 6):
         try:
-            r = requests.post("https://api.mistral.ai/v1/chat/completions",
-                                json=payload,
-                                headers=HEADERS,
-                                timeout=60)
+            r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=60)
             if r.status_code == 429:
-                wait = 2 ** attempt + random.uniform(0, 1)
-                time.sleep(wait)
+                time.sleep(2 ** attempt + random.uniform(0, 1))
                 continue
             r.raise_for_status()
             return r.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
+        except:
             if attempt == 5:
-                st.error(f"Mistral API failed after 5 retries: {e}")
+                st.error("Mistral API failed after 5 retries")
                 st.stop()
             time.sleep(2 ** attempt)
     st.stop()
@@ -80,14 +74,18 @@ Keep elements away from edges. Make it premium.
             {"role": "contact", "x": 60,  "y": 1160,"w": 600, "h": 80}
         ]
 
-# ---------- UI ----------
-uploaded = st.file_uploader("Product PNG (transparent best)", type=["png"])
-model   = st.text_input("Product Name", "Modern Corner Sofa")
-price   = st.text_input("Price", "KES 14,500")
-contact = st.text_input("Contact", "0710 338 377 • sminteriors.co.ke")
+# --- UI ---
+col1, col2 = st.columns(2)
+with col1:
+    uploaded = st.file_uploader("Product PNG (transparent best)", type=["png"])
+with col2:
+    model = st.text_input("Product Name", "Modern Corner Sofa")
+    price = st.text_input("Price", "KES 14,500")
+    contact = st.text_input("Contact", "0710 338 377 • sminteriors.co.ke")
+
 generate = st.button("Generate 6s AI Video", type="primary", use_container_width=True)
 
-# ---------- Draw one frame ----------
+# --- Draw one frame (RGBA → RGB) ---
 def draw_frame(t, img, boxes, price, contact, caption):
     canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(canvas)
@@ -123,7 +121,10 @@ def draw_frame(t, img, boxes, price, contact, caption):
 
     # Caption at top
     draw.text((WIDTH//2, 100), caption.upper(), fill="white", anchor="mt", font_size=56, stroke_width=3, stroke_fill="black")
-    return np.array(canvas)
+
+    # --- DROP ALPHA → RGB only ---
+    rgb = np.array(canvas)[:, :, :3]   # remove 4th channel
+    return rgb
 
 # --- Generate ---
 if generate:
