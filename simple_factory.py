@@ -63,7 +63,6 @@ Ensure **no overlap** between boxes. Keep 50 px margin.
     try:
         return json.loads(text)
     except:
-        # fallback grid
         return [
             {"role": "logo",    "x": 40,  "y": 40,  "w": 240, "h": 120},
             {"role": "product", "x": 60,  "y": 180, "w": 600, "h": 780},
@@ -110,24 +109,52 @@ TEMPLATES = {
     }
 }
 
-# ---------- Remove BG (free) ----------
-def remove_bg(pil_im):
-    buf = io.BytesIO()
-    pil_im.save(buf, format="PNG")
-    buf.seek(0)
-    r = requests.post("https://api.pixian.ai/remove", files={"image": ("in.png", buf, "image/png")})
-    if r.headers.get("Content-Type") != "image/png":
-        return pil_im  # fallback
-    return Image.open(io.BytesIO(r.content))
+def ease_out_bounce(t):
+    n1, d1 = 7.5625, 2.75
+    if t < 1 / d1: return n1 * t * t
+    elif t < 2 / d1:
+        t -= 1.5 / d1
+        return n1 * t * t + 0.75
+    elif t < 2.5 / d1:
+        t -= 2.25 / d1
+        return n1 * t * t + 0.9375
+    else:
+        t -= 2.625 / d1
+        return n1 * t * t + 0.984375
 
-# ---------- Proportional logo ----------
+def auto_fit_text(draw, text, x, y, w, h, start_size, color):
+    size = start_size
+    while size > 16:
+        font = ImageFont.load_default() if size < 20 else ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+        lines = []
+        words = text.split()
+        line = ""
+        for wrd in words:
+            test = line + " " + wrd if line else wrd
+            if draw.textlength(test, font=font) <= w - 20:
+                line = test
+            else:
+                lines.append(line)
+                line = wrd
+        if line:
+            lines.append(line)
+        line_h = size + 4
+        total_h = len(lines) * line_h
+        if total_h <= h - 10:
+            y_off = y + (h - total_h) // 2
+            for ln in lines:
+                lx = x + (w - draw.textlength(ln, font=font)) // 2
+                draw.text((lx, y_off), ln.upper(), fill=color, font=font, stroke_width=2, stroke_fill="black")
+                y_off += line_h
+            break
+        size -= 2
+
 def proportional_resize(im, max_h):
     aspect = im.width / im.height
     new_h = max_h
     new_w = int(aspect * new_h)
     return im.resize((new_w, new_h), Image.LANCZOS)
 
-# ---------- Animated background ----------
 def draw_circles(draw, t, template):
     T = TEMPLATES[template]
     n = 8
@@ -140,7 +167,6 @@ def draw_circles(draw, t, template):
         color = T["accent"] + f"{alpha:02x}"
         draw.ellipse([(x - r, y - r), (x + r, y + r)], fill=color)
 
-# ---------- Draw one frame (RGBA → RGB) ----------
 def draw_frame(t, img, boxes, price, contact, caption, template):
     T = TEMPLATES[template]
     canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
@@ -163,7 +189,7 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
     # 3. Logo (proportional + shadow)
     logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
     for b in boxes:
-        if b["role"] == "logo":
+        if b["role"] == "logo"]:
             logo = proportional_resize(logo, b["h"])
             if T["shadow"]:
                 shadow = logo.copy()
@@ -173,7 +199,7 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 4. Product (Canva bounce + shadow)
     for b in boxes:
-        if b["role"] == "product":
+        if b["role"] == "product"]:
             scale = 0.94 + 0.06 * ease_out_bounce(t / DURATION)
             w2, h2 = int(b["w"] * scale), int(b["h"] * scale)
             prod = img.resize((w2, h2), Image.LANCZOS)
@@ -187,14 +213,14 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 5. Price (Canva badge + bounce)
     for b in boxes:
-        if b["role"] == "price":
+        if b["role"] == "price"]:
             bounce = int(10 * ease_out_bounce((t % 1) / 1))
             draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=20, fill=T["price_bg"])
             draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=T["price_text"], anchor="mm", font_size=T["price_size"])
 
     # 6. Contact (Canva style)
     for b in boxes:
-        if b["role"] == "contact":
+        if b["role"] == "contact"]:
             draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2), contact, fill=T["text"], anchor="mm", font_size=T["contact_size"])
 
     # 7. Animated circles (free)
@@ -228,3 +254,10 @@ if generate:
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         imageio.imwrite(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
+        video_path = tmp.name
+
+    st.video(video_path)
+    with open(video_path, "rb") as f:
+        st.download_button("Download Canva MP4", f, f"{model.replace(' ', '_')}_canva.mp4", "video/mp4")
+
+    st.balloons()
