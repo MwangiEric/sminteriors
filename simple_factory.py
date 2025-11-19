@@ -118,7 +118,7 @@ TEMPLATES = {
 col1, col2 = st.columns(2)
 with col1:
     uploaded = st.file_uploader("Product image (PNG or JPG)", type=["png", "jpg", "jpeg"])
-    img = Image.open(uploaded).convert("RGBA")
+
 with col2:
     model   = st.text_input("Product Name", "Modern Corner Sofa")
     price   = st.text_input("Price", "KES 14,500")
