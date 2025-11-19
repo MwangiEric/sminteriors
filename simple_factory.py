@@ -5,7 +5,7 @@ import numpy as np
 from moviepy.editor import ImageSequenceClip, AudioFileClip
 
 # --- GLOBAL CONFIGURATION ---
-st.set_page_config(page_title="AdGen Pro: Stable Edition", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="AdGen Pro: Brand Edition", layout="wide", page_icon="🎬")
 
 # --- CONSTANTS ---
 WIDTH, HEIGHT = 720, 1280
@@ -13,11 +13,12 @@ FPS = 30
 DURATION = 6
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
 
-# Royalty-free music tracks
+# More reliable royalty-free music tracks (using archive.org for better stability)
 MUSIC_TRACKS = {
-    "Upbeat Pop": "https://cdn.pixabay.com/audio/2024/05/24/audio_16709e7558.mp3",
-    "Luxury Chill": "https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf07a.mp3",
-    "High Energy": "https://cdn.pixabay.com/audio/2024/01/16/audio_e2b992254f.mp3"
+    "Upbeat Pop (Stable)": "https://archive.org/download/Bensound_-_Jazzy_Frenchy/Bensound_-_Jazzy_Frenchy.mp3",
+    "Luxury Chill (Stable)": "https://archive.org/download/bensound-adaytoremember/bensound-adaytoremember.mp3",
+    "High Energy (Stable)": "https://archive.org/download/bensound-sweet/bensound-sweet.mp3",
+    "Acoustic Breeze (Stable)": "https://archive.org/download/bensound-acousticbreeze/bensound-acousticbreeze.mp3"
 }
 
 # --- API SETUP ---
@@ -28,18 +29,18 @@ if "mistral_key" not in st.secrets:
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
 # --- STABLE LOCAL FONT LOADER ---
+# Use system fonts (most reliable on Streamlit Cloud's Linux environment)
 def get_font(size):
     """
     Tries to load standard system fonts available in Streamlit Cloud (Linux).
     Falls back to default if nothing is found.
     """
-    # List of common fonts found on Linux/Debian (Streamlit Cloud) and Windows
     possible_fonts = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",       # Standard Streamlit Cloud
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", # Common Linux
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",          # Common Linux
-        "arial.ttf",   # Windows
-        "Arial.ttf",   # Windows/Mac
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "arial.ttf", # For local Windows testing
+        "Arial.ttf", # For local Mac testing
     ]
     
     for path in possible_fonts:
@@ -48,11 +49,11 @@ def get_font(size):
         except OSError:
             continue
             
-    # Absolute fallback (looks a bit small/pixelated but never crashes)
+    # Absolute fallback to Pillow's built-in default font
     try:
-        return ImageFont.load_default(size=size) # Pillow >= 10.0.0
+        return ImageFont.load_default(size=size) # For Pillow >= 10.0.0
     except:
-        return ImageFont.load_default() # Older Pillow
+        return ImageFont.load_default() # For older Pillow versions
 
 # --- MATH & ANIMATION ---
 def ease_out_elastic(t):
@@ -68,8 +69,15 @@ def linear_fade(t, start, duration):
     if t > start + duration: return 1.0
     return (t - start) / duration
 
-# --- TEMPLATES ---
+# --- TEMPLATES (Updated with SM Interiors Brand Colors) ---
 TEMPLATES = {
+    "SM Interiors Brand": { # NEW BRAND TEMPLATE
+        "bg_grad": ["#4C3B30", "#332A22"], # Deep brown, slightly lighter brown
+        "accent": "#D2A544", # Brand Gold
+        "text": "#FFFFFF",   # White text
+        "price_bg": "#D2A544", # Gold Price background
+        "price_text": "#000000" # Black text on gold
+    },
     "Midnight Luxury": {
         "bg_grad": ["#0f0c29", "#302b63", "#24243e"],
         "accent": "#FFD700", "text": "#FFFFFF", 
@@ -282,14 +290,14 @@ def create_frame(t, img, boxes, data, template_name):
 with st.sidebar:
     st.title("🛠️ Config")
     u_file = st.file_uploader("Product Image", type=["png", "jpg", "jpeg"])
-    u_model = st.text_input("Product Name", "Luxury Watch")
-    u_price = st.text_input("Price", "$299")
-    u_contact = st.text_input("CTA", "Shop Now")
-    u_template = st.selectbox("Style", list(TEMPLATES.keys()))
+    u_model = st.text_input("Product Name", "Walden Media Console") # Pre-filled
+    u_price = st.text_input("Price", "Ksh 49,900") # Pre-filled
+    u_contact = st.text_input("CTA", "0710895737") # Pre-filled
+    u_template = st.selectbox("Style", list(TEMPLATES.keys()), index=0) # Default to brand
     u_music = st.selectbox("Music", list(MUSIC_TRACKS.keys()))
     btn_run = st.button("🚀 Generate Video", type="primary")
 
-st.title("🎬 AdGen Pro: Stable Edition")
+st.title("🎬 AdGen Pro: Brand-Ready Video Factory")
 
 if btn_run and u_file:
     status = st.status("Processing...", expanded=True)
@@ -327,14 +335,16 @@ if btn_run and u_file:
         # Audio Handling
         aud_url = MUSIC_TRACKS[u_music]
         r_aud = requests.get(aud_url)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tf:
+        # Ensure the temp file has the correct extension for MoviePy
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tf: 
             tf.write(r_aud.content)
             tf_path = tf.name
         
         audioclip = AudioFileClip(tf_path).subclip(0, DURATION).audio_fadeout(1)
         final_clip = clip.set_audio(audioclip)
     except Exception as e:
-        st.warning(f"Audio failed ({e}), using silent video.")
+        st.warning(f"Audio failed ({e}), rendering silent video.")
+        print(f"MoviePy Audio Error Details: {e}") # Print full error for debugging
         final_clip = clip
         
     # Save output
@@ -352,7 +362,7 @@ if btn_run and u_file:
         st.success("Ad Generated!")
         st.info(f"Hook: {caption}")
         with open(out_path, "rb") as f:
-            st.download_button("⬇️ Download MP4", f, "ad_pro.mp4")
+            st.download_button("⬇️ Download MP4", f, "ad_brand_ready.mp4")
 
 elif btn_run:
     st.error("Upload an image first!")
