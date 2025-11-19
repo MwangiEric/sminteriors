@@ -3,29 +3,121 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
 import imageio.v3 as imageio
 
-st.set_page_config(page_title="S&M Canva Factory", layout="wide") # Use wide layout
+# --- GLOBAL CONFIG & SECRETS ---
+st.set_page_config(page_title="S&M Canva Factory", layout="wide")
 st.title("🎬 Canva-Quality AI Ads Factory")
 
-# --- GLOBAL CONFIG & SECRETS (Keep these) ---
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
 N_FRAMES = FPS * DURATION
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
-# ... (Mistral Key and HEADERS setup remain the same) ...
 
-# --- NEW: Font Loading (Pro-level requires a good font) ---
-# NOTE: Ensure this font path exists in your environment or use a Google Font URL/service
+if "mistral_key" not in st.secrets:
+    st.error("Add `mistral_key` in Secrets (free at console.mistral.ai)")
+    st.stop()
+HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
+
+# --- FONT LOADING ---
 try:
+    # Attempt to load a common bold font (Adjust path if needed)
     FONT_BOLD = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
 except IOError:
-    FONT_BOLD = ImageFont.load_default() # Fallback
+    # Fallback if the path is invalid
+    FONT_BOLD = ImageFont.load_default() 
 
-# --- CACHED AI and Helper Functions ---
-# @st.cache_data ensures the AI call only runs when inputs (model, price) change.
+# --- ANIMATION HELPERS (Define first, as they are used by TEMPLATES-dependent functions) ---
+
+def ease_out_bounce(t):
+    n1, d1 = 7.5625, 2.75
+    if t < 1 / d1: return n1 * t * t
+    elif t < 2 / d1:
+        t -= 1.5 / d1
+        return n1 * t * t + 0.75
+    elif t < 2.5 / d1:
+        t -= 2.25 / d1
+        return n1 * t * t + 0.9375
+    else:
+        t -= 2.625 / d1
+        return n1 * t * t + 0.984375
+
+def proportional_resize(im, max_h):
+    aspect = im.width / im.height
+    new_h = max_h
+    new_w = int(aspect * new_h)
+    return im.resize((new_w, new_h), Image.LANCZOS)
+
+# --- TEMPLATES (Defined second, as they are referenced by drawing functions) ---
+TEMPLATES = {
+    "Canva Pop": {
+        "bg_grad": ["#071025", "#1e3fae"],
+        "accent": "#00e6ff",
+        "text": "#ffffff",
+        "price_bg": "#001225",
+        "price_text": "#00e6ff",
+        "caption_size": 56,
+        "price_size": 68,
+        "contact_size": 36,
+        "shadow": True,
+        "parallax": 0.06
+    },
+    "Canva Luxury": {
+        "bg_grad": ["#04080f", "#091426"],
+        "accent": "#d4af37",
+        "text": "#ffffff",
+        "price_bg": "#d4af37",
+        "price_text": "#000000",
+        "caption_size": 52,
+        "price_size": 72,
+        "contact_size": 34,
+        "shadow": True,
+        "parallax": 0.04
+    },
+    "Canva Minimal": {
+        "bg_grad": ["#f6f7f9", "#e9eef6"],
+        "accent": "#1e3fae",
+        "text": "#1e3fae",
+        "price_bg": "#1e3fae",
+        "price_text": "#ffffff",
+        "caption_size": 50,
+        "price_size": 66,
+        "contact_size": 32,
+        "shadow": False,
+        "parallax": 0.02
+    }
+}
+
+# --- AI API CALLS ---
+def ask_mistral(payload):
+    for attempt in range(1, 6):
+        try:
+            r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=60)
+            if r.status_code == 429:
+                time.sleep(2 ** attempt + random.uniform(0, 1))
+                continue
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            if attempt == 5:
+                st.error(f"Mistral API failed after 5 retries: {e}")
+                st.stop()
+            time.sleep(2 ** attempt)
+    st.stop()
+
+def get_caption(img_b64):
+    payload = {
+        "model": "pixtral-12b-2409",
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "Describe this furniture in one short, catchy TikTok hook (max 12 words)."},
+            {"type": "image_url", "image_url": f"data:image/png;base64,{img_b64}"}
+        ]}],
+        "max_tokens": 30
+    }
+    return ask_mistral(payload)
+
+# --- CACHED AI Layout Function ---
 @st.cache_data
 def get_layout(model, price):
-    # ... (function body remains the same, but now it's cached) ...
     payload = {
         "model": "mistral-large-latest",
         "messages": [{"role": "user", "content": f"""
@@ -44,12 +136,12 @@ Ensure **no overlap** between boxes. Keep 50 px margin.
         # PRO-LEVEL: Explicit validation of the JSON structure
         boxes = json.loads(text)
         required_roles = {"logo", "product", "price", "contact"}
-        if all(b["role"] in required_roles for b in boxes):
+        if all(b["role"] in required_roles for b in boxes) and len(boxes) >= 4:
              return boxes
         else:
-            st.warning("AI returned valid JSON but missing required roles. Using fallback layout.")
             raise ValueError
     except:
+        # Fallback Layout
         return [
             {"role": "logo", "x": 40, "y": 40, "w": 240, "h": 120},
             {"role": "product", "x": 60, "y": 180, "w": 600, "h": 780},
@@ -57,9 +149,19 @@ Ensure **no overlap** between boxes. Keep 50 px margin.
             {"role": "contact", "x": 60, "y": 1160, "w": 600, "h": 80}
         ]
 
-# ... (TEMPLATES dictionary remains the same) ...
-# ... (ease_out_bounce, auto_fit_text, proportional_resize, draw_circles remain the same) ...
+# --- DRAWING FUNCTIONS (Can safely reference TEMPLATES now) ---
 
+def draw_circles(draw, t, template):
+    T = TEMPLATES[template]
+    n = 8
+    for i in range(n):
+        angle = t * 0.3 + i * 0.8
+        x = int(WIDTH // 2 + math.cos(angle) * 400)
+        y = int(HEIGHT * 0.5 + math.sin(angle) * 300)
+        r = 20 + i * 6
+        alpha = int(255 * (0.15 - i * 0.01))
+        color = T["accent"] + f"{alpha:02x}"
+        draw.ellipse([(x - r, y - r), (x + r, y + r)], fill=color)
 
 def draw_caption_animation(draw, text, box, t, template):
     """
@@ -70,9 +172,9 @@ def draw_caption_animation(draw, text, box, t, template):
     
     # Static text fitting logic
     size = T["caption_size"]
-    font = FONT_BOLD
+    font = FONT_BOLD.font_variant(size=size) if hasattr(FONT_BOLD, 'font_variant') else FONT_BOLD
     
-    # Word wrapping logic (re-using part of auto_fit_text for consistency)
+    # Word wrapping logic
     lines = []
     words = text.split()
     line = ""
@@ -95,7 +197,7 @@ def draw_caption_animation(draw, text, box, t, template):
     TIME_START = 0.5 # Animation starts at 0.5s
     TIME_DURATION = 1.0 # Animation lasts 1.0s
     
-    # Draw each line and letter
+    # Draw each line and word
     current_word_index = 0
     for i, ln in enumerate(lines):
         y_off = y_off_base + i * line_h
@@ -138,15 +240,21 @@ def draw_caption_animation(draw, text, box, t, template):
             # Update X offset for the next word
             word_x_offset += draw.textlength(wrd + " ", font=font)
 
-
+# --- MAIN DRAW FUNCTION ---
 def draw_frame(t, img, boxes, price, contact, caption, template):
     T = TEMPLATES[template]
     canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    # ... (1. Canva gradient background remains the same) ...
+    # 1. Canva gradient background
+    for y in range(HEIGHT):
+        blend = y / HEIGHT
+        r = int((int(T["bg_grad"][0][1:3], 16)) * (1 - blend) + int(T["bg_grad"][1][1:3], 16) * blend)
+        g = int((int(T["bg_grad"][0][3:5], 16)) * (1 - blend) + int(T["bg_grad"][1][3:5], 16) * blend)
+        b = int((int(T["bg_grad"][0][5:7], 16)) * (1 - blend) + int(T["bg_grad"][1][5:7], 16) * blend)
+        draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
 
-    # 2. Soft background copy (parallax) - with added dynamic opacity
+    # 2. Soft background copy (parallax) - with dynamic opacity
     if img:
         bg = img.resize((WIDTH, int(HEIGHT * 0.55)), Image.LANCZOS).filter(ImageFilter.GaussianBlur(12))
         offset = int(T["parallax"] * WIDTH * math.sin(t * math.pi / DURATION))
@@ -155,34 +263,74 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
         alpha_factor = np.clip(t / 1.0, 0, 1)
         bg_alpha = int(255 * 0.4 * alpha_factor)
         
+        # Create a new image with controlled alpha for pasting
         bg_rgba = bg.convert("RGBA")
-        bg_data = bg_rgba.getdata()
+        bg_rgba_faded = Image.new("RGBA", bg.size)
         
-        new_data = []
-        for item in bg_data:
-            if item[3] > 0: # Check if original pixel is not transparent
-                new_data.append((item[0], item[1], item[2], bg_alpha))
-            else:
-                new_data.append(item)
-        bg_rgba.putdata(new_data)
+        # Apply the calculated alpha to the whole image
+        alpha_mask = Image.new('L', bg.size, bg_alpha)
+        bg_rgba_faded.paste(bg_rgba, (0, 0), alpha_mask)
         
-        canvas.paste(bg_rgba, (offset, int(HEIGHT * 0.22)), bg_rgba)
-        
+        canvas.paste(bg_rgba_faded, (offset, int(HEIGHT * 0.22)), bg_rgba_faded)
+
     # 3. Logo (proportional + shadow)
-    # ... (remains the same) ...
+    logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
+    for b in boxes:
+        if b["role"] == "logo":
+            logo = proportional_resize(logo, b["h"])
+            if T["shadow"]:
+                shadow = logo.copy().filter(ImageFilter.GaussianBlur(6))
+                canvas.paste(shadow, (b["x"] + 4, b["y"] + 4), shadow)
+            canvas.paste(logo, (b["x"], b["y"]), logo)
 
     # 4. Product (Canva bounce + shadow)
-    # ... (remains the same) ...
+    for b in boxes:
+        if b["role"] == "product":
+            scale = 0.94 + 0.06 * ease_out_bounce(t / DURATION)
+            w2, h2 = int(b["w"] * scale), int(b["h"] * scale)
+            prod = img.resize((w2, h2), Image.LANCZOS)
+            x = b["x"] + (b["w"] - w2) // 2
+            y = b["y"] + (b["h"] - h2) // 2
+            if T["shadow"]:
+                shadow = prod.copy().filter(ImageFilter.GaussianBlur(8))
+                canvas.paste(shadow, (x + 8, y + 8), shadow)
+            canvas.paste(prod, (x, y), prod.convert("RGBA"))
 
     # 5. Price (Canva badge + bounce)
-    # ... (remains the same) ...
+    for b in boxes:
+        if b["role"] == "price":
+            # Bounce effect on the vertical position (1s cycle)
+            bounce = int(10 * ease_out_bounce((t % 1) / 1))
+            
+            # Apply fade-in for the price badge (appears after 2 seconds)
+            price_alpha_factor = np.clip((t - 2.0) / 1.0, 0, 1) # Fade in from 2.0s to 3.0s
+            badge_color = T["price_bg"]
+            text_color = T["price_text"]
+            
+            # Create a separate layer for the price badge to apply opacity
+            badge_layer = Image.new("RGBA", canvas.size)
+            badge_draw = ImageDraw.Draw(badge_layer)
+            
+            badge_draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=20, fill=badge_color)
+            
+            # Apply opacity to the badge layer
+            alpha_mask = Image.new('L', canvas.size, int(255 * price_alpha_factor))
+            canvas.paste(badge_layer, (0, 0), alpha_mask)
+
+            # Draw text on top (simple, no per-frame opacity needed after 3.0s)
+            if price_alpha_factor > 0.1: # Only draw text when visible
+                font_price = FONT_BOLD.font_variant(size=T["price_size"]) if hasattr(FONT_BOLD, 'font_variant') else FONT_BOLD
+                draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=text_color, anchor="mm", font=font_price)
 
     # 6. Contact (Canva style)
-    # ... (remains the same) ...
-    
+    for b in boxes:
+        if b["role"] == "contact":
+            font_contact = FONT_BOLD.font_variant(size=T["contact_size"]) if hasattr(FONT_BOLD, 'font_variant') else FONT_BOLD
+            draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2), contact, fill=T["text"], anchor="mm", font=font_contact)
+
     # 7. Animated circles (free)
     draw_circles(draw, t, template)
-    
+
     # 8. NEW: Animated Caption
     caption_box = next((b for b in boxes if b["role"] == "caption"), None)
     if caption_box:
@@ -192,7 +340,8 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
     rgb = np.array(canvas)[:, :, :3]
     return rgb
 
-# ---------- Streamlit UI and Generation Flow ----------
+# ---------- Streamlit UI and Generation Flow (Pro-Level Layout) ----------
+
 # PRO-LEVEL: Use sidebar for inputs
 with st.sidebar:
     st.header("⚙️ Ad Configuration")
@@ -206,14 +355,14 @@ with st.sidebar:
     # Template Selection
     template_choice = st.radio("2. Choose Ad Style", list(TEMPLATES.keys()))
     
-    generate_button = st.button("🚀 Generate TikTok Video Ad")
+    generate_button = st.button("🚀 Generate TikTok Video Ad", use_container_width=True)
 
 # Main content area
-st.header("Upload, Generate, Go Viral.")
+st.subheader("Upload, Configure, Generate. Go Viral.")
 
 # Handle image display
 if uploaded_file is not None:
-    st.image(uploaded_file, caption="Uploaded Image", use_column_width=True)
+    st.image(uploaded_file, caption="Uploaded Image", width=360) # Smaller preview
 else:
     st.info("Upload an image in the sidebar to begin.")
 
@@ -223,9 +372,12 @@ if generate_button and uploaded_file is not None:
     
     img = Image.open(uploaded_file).convert("RGBA")
     
+    # Placeholder for status messages and video output
+    status_placeholder = st.empty()
+    
     # 1. AI Analysis & Layout (with progress bar)
-    st.subheader("Process Status")
-    progress_bar = st.progress(0, text="Starting AI Analysis...")
+    status_placeholder.subheader("Process Status")
+    progress_bar = status_placeholder.progress(0, text="Starting AI Analysis...")
 
     with st.spinner("1. Getting AI Hook from Pixtral..."):
         buf = io.BytesIO()
@@ -236,13 +388,14 @@ if generate_button and uploaded_file is not None:
 
     with st.spinner("2. Generating AI Layout JSON..."):
         boxes = get_layout(model_input, price_input)
-        # Add the fixed caption box AFTER AI layout to ensure it's included
+        # Add the fixed caption box
         boxes.append({"role": "caption", "x": 60, "y": 80, "w": 600, "h": 100})
         
     progress_bar.progress(66, text="Layout complete. Rendering video frames...")
     
-    st.subheader("AI Outputs")
-    st.markdown(f"**🔥 AI Hook:** {caption}")
+    status_placeholder.subheader("AI Outputs")
+    status_placeholder.markdown(f"**🔥 AI Hook:** {caption}")
+    
     with st.expander("View Generated AI Layout (JSON)"):
         st.json(boxes)
 
@@ -254,7 +407,7 @@ if generate_button and uploaded_file is not None:
         t = i / FPS
         frame = draw_frame(t, img, boxes, price_input, contact_input, caption, template_choice)
         frames.append(frame)
-        # Update progress bar every few frames to prevent excessive overhead
+        # Update progress bar every few frames
         if i % 10 == 0:
             progress_bar.progress(66 + int((i / N_FRAMES) * 34), text=f"Rendering frame {i}/{N_FRAMES}...")
 
@@ -271,11 +424,8 @@ if generate_button and uploaded_file is not None:
         st.download_button("⬇️ Download High-Quality MP4", f, f"{model_input.replace(' ', '_')}_canva.mp4", "video/mp4")
 
     st.balloons()
-
-# --- Placeholder/Initial UI ---
-if not generate_button and uploaded_file is None:
-    st.info("Select your image and customize the settings in the sidebar to generate a 6-second, animated ad.")
-
-# --- Link to Streamlit Guide ---
+    
+# --- Concluding Section ---
 st.markdown("---")
 st.caption("Need more Streamlit expertise? Learn how to deploy advanced data apps.")
+st.markdown("The video on [Building a Streamlit App with Images, Videos, Audio & Interactive Messages!](https://www.youtube.com/watch?v=t7YQCQ-gkY4) is relevant because it shows the fundamental Streamlit principles needed to build the UI for a video factory application.")
