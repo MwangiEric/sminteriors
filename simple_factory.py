@@ -21,10 +21,27 @@ if "mistral_key" not in st.secrets:
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
 # ---------- HTTP helpers ----------
+import time, random
+
 def ask_mistral(payload):
-    r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=60)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
+    for attempt in range(1, 6):          # 5 tries
+        try:
+            r = requests.post("https://api.mistral.ai/v1/chat/completions",
+                                json=payload,
+                                headers=HEADERS,
+                                timeout=60)
+            if r.status_code == 429:
+                wait = 2 ** attempt + random.uniform(0, 1)
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            if attempt == 5:
+                st.error(f"Mistral API failed after 5 retries: {e}")
+                st.stop()
+            time.sleep(2 ** attempt)
+    st.stop()
 
 def get_caption(img_b64):
     payload = {
