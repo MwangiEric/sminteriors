@@ -199,8 +199,9 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
             canvas.paste(logo, (b["x"], b["y"]), logo)
 
     # 4. Product (Canva bounce + shadow)
+    # 4. Product (Canva bounce + shadow)
     for b in boxes:
-        if b["role"] == "product"]:
+        if b["role"] == "product":
             scale = 0.94 + 0.06 * ease_out_bounce(t / DURATION)
             w2, h2 = int(b["w"] * scale), int(b["h"] * scale)
             prod = img.resize((w2, h2), Image.LANCZOS)
