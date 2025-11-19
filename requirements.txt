@@ -4,3 +4,4 @@ imageio
 imageio-ffmpeg
 requests
 mistralai==0.4.2
+replicate==0.21.0
