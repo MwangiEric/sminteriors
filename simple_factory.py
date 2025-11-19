@@ -5,7 +5,7 @@ import numpy as np
 from moviepy.editor import ImageSequenceClip, AudioFileClip
 
 # --- GLOBAL CONFIGURATION ---
-st.set_page_config(page_title="AdGen Pro: AI Video Factory", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="AdGen Pro: Stable Edition", layout="wide", page_icon="🎬")
 
 # --- CONSTANTS ---
 WIDTH, HEIGHT = 720, 1280
@@ -27,23 +27,32 @@ if "mistral_key" not in st.secrets:
 
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
-# --- RESOURCE LOADING ---
-@st.cache_resource
-def load_font_from_web():
-    """Downloads a bold font to memory to avoid path errors."""
-    url = "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Bold.ttf"
-    try:
-        r = requests.get(url, timeout=5)
-        return io.BytesIO(r.content)
-    except:
-        return None
-
-FONT_FILE = load_font_from_web()
-
+# --- STABLE LOCAL FONT LOADER ---
 def get_font(size):
-    if FONT_FILE:
-        return ImageFont.truetype(FONT_FILE, size)
-    return ImageFont.load_default()
+    """
+    Tries to load standard system fonts available in Streamlit Cloud (Linux).
+    Falls back to default if nothing is found.
+    """
+    # List of common fonts found on Linux/Debian (Streamlit Cloud) and Windows
+    possible_fonts = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",       # Standard Streamlit Cloud
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", # Common Linux
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",          # Common Linux
+        "arial.ttf",   # Windows
+        "Arial.ttf",   # Windows/Mac
+    ]
+    
+    for path in possible_fonts:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+            
+    # Absolute fallback (looks a bit small/pixelated but never crashes)
+    try:
+        return ImageFont.load_default(size=size) # Pillow >= 10.0.0
+    except:
+        return ImageFont.load_default() # Older Pillow
 
 # --- MATH & ANIMATION ---
 def ease_out_elastic(t):
@@ -95,7 +104,6 @@ def ask_mistral_safe(payload, retries=3):
             return r.json()["choices"][0]["message"]["content"].strip()
         except Exception as e:
             if attempt == retries - 1:
-                print(f"API Failed finally: {e}")
                 return None
     return None
 
@@ -281,7 +289,7 @@ with st.sidebar:
     u_music = st.selectbox("Music", list(MUSIC_TRACKS.keys()))
     btn_run = st.button("🚀 Generate Video", type="primary")
 
-st.title("🎬 AdGen Pro: Top-Tier Video Factory")
+st.title("🎬 AdGen Pro: Stable Edition")
 
 if btn_run and u_file:
     status = st.status("Processing...", expanded=True)
