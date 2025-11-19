@@ -279,7 +279,3 @@ if not generate_button and uploaded_file is None:
 # --- Link to Streamlit Guide ---
 st.markdown("---")
 st.caption("Need more Streamlit expertise? Learn how to deploy advanced data apps.")
-The video on [Building a Streamlit App with Images, Videos, Audio & Interactive Messages!](https://www.youtube.com/watch?v=t7YQCQ-gkY4) is relevant because it shows the fundamental Streamlit principles needed to build the UI for a video factory application.
-
-
-http://googleusercontent.com/youtube_content/0
