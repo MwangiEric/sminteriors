@@ -228,4 +228,3 @@ if generate:
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         imageio.imwrite(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
-        video_path = tmp.name
