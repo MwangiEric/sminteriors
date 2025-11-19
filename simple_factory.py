@@ -1,10 +1,10 @@
-import streamlit as st, io, requests, math, tempfile, base64, json, re, time
-from PIL import Image, ImageDraw
+import streamlit as st, io, requests, math, tempfile, base64, json, random, time
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import imageio.v3 as imageio
 
-st.set_page_config(page_title="S&M Mistral Ads", layout="centered")
-st.title("S&M Interiors × Mistral AI")
+st.set_page_config(page_title="S&M Canva Ads", layout="centered")
+st.title("🎬 S&M Interiors × Canva-Quality AI Ads")
 st.caption("Upload product → AI writes hook + designs layout → 6s TikTok MP4 in seconds")
 
 # ---------- CONFIG ----------
@@ -20,7 +20,7 @@ if "mistral_key" not in st.secrets:
     st.stop()
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
-# ---------- HTTP helpers ----------
+# ---------- HTTP helpers (no SDK) ----------
 def ask_mistral(payload):
     for attempt in range(1, 6):
         try:
@@ -74,59 +74,166 @@ Keep elements away from edges. Make it premium.
             {"role": "contact", "x": 60,  "y": 1160,"w": 600, "h": 80}
         ]
 
-# --- UI ---
+# ---------- Canva-like templates ----------
+TEMPLATES = {
+    "Canva Pop": {
+        "bg_grad": ["#071025", "#1e3fae"],
+        "accent": "#00e6ff",
+        "text": "#ffffff",
+        "price_bg": "#001225",
+        "price_text": "#00e6ff",
+        "caption_size": 56,
+        "price_size": 68,
+        "contact_size": 36,
+        "shadow": True,
+        "parallax": 0.06
+    },
+    "Canva Luxury": {
+        "bg_grad": ["#04080f", "#091426"],
+        "accent": "#d4af37",
+        "text": "#ffffff",
+        "price_bg": "#d4af37",
+        "price_text": "#000000",
+        "caption_size": 52,
+        "price_size": 72,
+        "contact_size": 34,
+        "shadow": True,
+        "parallax": 0.04
+    },
+    "Canva Minimal": {
+        "bg_grad": ["#f6f7f9", "#e9eef6"],
+        "accent": "#1e3fae",
+        "text": "#1e3fae",
+        "price_bg": "#1e3fae",
+        "price_text": "#ffffff",
+        "caption_size": 50,
+        "price_size": 66,
+        "contact_size": 32,
+        "shadow": False,
+        "parallax": 0.02
+    }
+}
+
+# ---------- UI ----------
 col1, col2 = st.columns(2)
 with col1:
     uploaded = st.file_uploader("Product PNG (transparent best)", type=["png"])
 with col2:
-    model = st.text_input("Product Name", "Modern Corner Sofa")
-    price = st.text_input("Price", "KES 14,500")
+    model   = st.text_input("Product Name", "Modern Corner Sofa")
+    price   = st.text_input("Price", "KES 14,500")
     contact = st.text_input("Contact", "0710 338 377 • sminteriors.co.ke")
+    template_choice = st.selectbox("Template", list(TEMPLATES.keys()))
 
 generate = st.button("Generate 6s AI Video", type="primary", use_container_width=True)
 
-# --- Draw one frame (RGBA → RGB) ---
-def draw_frame(t, img, boxes, price, contact, caption):
-    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+# ---------- Helpers ----------
+def ease_out_bounce(t):
+    n1, d1 = 7.5625, 2.75
+    if t < 1 / d1: return n1 * t * t
+    elif t < 2 / d1:
+        t -= 1.5 / d1
+        return n1 * t * t + 0.75
+    elif t < 2.5 / d1:
+        t -= 2.25 / d1
+        return n1 * t * t + 0.9375
+    else:
+        t -= 2.625 / d1
+        return n1 * t * t + 0.984375
+
+def auto_fit_text(draw, text, x, y, w, h, start_size, color):
+    size = start_size
+    while size > 16:
+        font = ImageFont.load_default() if size < 20 else ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+        lines = []
+        words = text.split()
+        line = ""
+        for wrd in words:
+            test = line + " " + wrd if line else wrd
+            if draw.textlength(test, font=font) <= w - 20:
+                line = test
+            else:
+                lines.append(line)
+                line = wrd
+        if line:
+            lines.append(line)
+        line_h = size + 4
+        total_h = len(lines) * line_h
+        if total_h <= h - 10:
+            y_off = y + (h - total_h) // 2
+            for ln in lines:
+                lx = x + (w - draw.textlength(ln, font=font)) // 2
+                draw.text((lx, y_off), ln.upper(), fill=color, font=font, stroke_width=2, stroke_fill="black")
+                y_off += line_h
+            break
+        size -= 2
+
+# ---------- Draw one frame (RGBA → RGB) ----------
+def draw_frame(t, img, boxes, price, contact, caption, template):
+    T = TEMPLATES[template]
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    # Navy → gold gradient
+    # 1. Canva gradient background
     for y in range(HEIGHT):
         blend = y / HEIGHT
-        r = int(0 + 212 * blend)
-        g = int(31 + 168 * blend)
-        b = int(84 - 47 * blend)
+        r = int((int(T["bg_grad"][0][1:3], 16)) * (1 - blend) + int(T["bg_grad"][1][1:3], 16) * blend)
+        g = int((int(T["bg_grad"][0][3:5], 16)) * (1 - blend) + int(T["bg_grad"][1][3:5], 16) * blend)
+        b = int((int(T["bg_grad"][0][5:7], 16)) * (1 - blend) + int(T["bg_grad"][1][5:7], 16) * blend)
         draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
 
+    # 2. Soft background copy (parallax)
+    if img:
+        bg = img.resize((WIDTH, int(HEIGHT * 0.55)), Image.LANCZOS)).filter(ImageFilter.GaussianBlur(12))
+        offset = int(T["parallax"] * WIDTH * math.sin(t * math.pi / DURATION))
+        canvas.paste(bg, (offset, int(HEIGHT * 0.22)), bg.convert("RGBA"))
+
+    # 3. Logo (Canva shadow + pulse)
     logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
     for b in boxes:
         if b["role"] == "logo":
-            logo_resized = logo.resize((b["w"], b["h"]))
-            canvas.paste(logo_resized, (b["x"], b["y"]), logo_resized)
+            logo = logo.resize((b["w"], b["h"]), Image.LANCZOS)
+            if T["shadow"]:
+                shadow = logo.copy()
+                shadow = shadow.filter(ImageFilter.GaussianBlur(6))
+                canvas.paste(shadow, (b["x"] + 4, b["y"] + 4), shadow)
+            canvas.paste(logo, (b["x"], b["y"]), logo)
 
-        if b["role"] == "product":
-            scale = 0.94 + 0.06 * math.sin(t * math.pi * 2 / DURATION)
-            w2 = int(b["w"] * scale)
-            h2 = int(b["h"] * scale)
-            prod = img.resize((w2, h2))
-            canvas.paste(prod, (b["x"] + (b["w"]-w2)//2, b["y"] + (b["h"]-h2)//2), prod)
+    # 4. Product (Canva bounce + shadow)
+    for b in boxes:
+        if b["role"] == "product"]:
+            scale = 0.94 + 0.06 * ease_out_bounce(t / DURATION)
+            w2, h2 = int(b["w"] * scale), int(b["h"] * scale)
+            prod = img.resize((w2, h2), Image.LANCZOS)
+            x = b["x"] + (b["w"] - w2) // 2
+            y = b["y"] + (b["h"] - h2) // 2
+            if T["shadow"]:
+                shadow = prod.copy()
+                shadow = shadow.filter(ImageFilter.GaussianBlur(8))
+                canvas.paste(shadow, (x + 8, y + 8), shadow)
+            canvas.paste(prod, (x, y), prod.convert("RGBA"))
 
-        if b["role"] == "price":
-            bounce = 10 * math.sin(t * 3 * math.pi / DURATION)
-            draw.rounded_rectangle([b["x"], b["y"]+bounce, b["x"]+b["w"], b["y"]+b["h"]+bounce], radius=20, fill="#D4AF37")
-            draw.text((b["x"]+b["w"]//2, b["y"]+b["h"]//2+bounce), price, fill="white", anchor="mm", font_size=68)
+    # 5. Price (Canva badge + bounce)
+    for b in boxes:
+        if b["role"] == "price"]:
+            bounce = int(10 * ease_out_bounce((t % 1) / 1))
+            draw.rounded_rectangle([(b["x"], b["y"] + bounce), (b["x"] + b["w"], b["y"] + b["h"] + bounce)], radius=20, fill=T["price_bg"])
+            draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2 + bounce), price, fill=T["price_text"], anchor="mm", font_size=T["price_size"])
 
-        if b["role"] == "contact":
-            draw.text((b["x"]+b["w"]//2, b["y"]+b["h"]//2), contact, fill="white", anchor="mm", font_size=36)
+    # 6. Contact (Canva style)
+    for b in boxes:
+        if b["role"] == "contact"]:
+            draw.text((b["x"] + b["w"] // 2, b["y"] + b["h"] // 2), contact, fill=T["text"], anchor="mm", font_size=T["contact_size"])
 
-    # Caption at top
-    draw.text((WIDTH//2, 100), caption.upper(), fill="white", anchor="mt", font_size=56, stroke_width=3, stroke_fill="black")
+    # 7. Caption (auto-fit inside AI box)
+    for b in boxes:
+        if b["role"] == "caption"]:
+            auto_fit_text(draw, caption, b["x"], b["y"], b["w"], b["h"], T["caption_size"], T["text"])
 
     # --- DROP ALPHA → RGB only ---
-    rgb = np.array(canvas)[:, :, :3]   # remove 4th channel
+    rgb = np.array(canvas)[:, :, :3]
     return rgb
 
-# --- Generate ---
+# ---------- Generate ----------
 if generate:
     if not uploaded:
         st.error("Upload a product image first!")
@@ -140,12 +247,13 @@ if generate:
         b64 = base64.b64encode(buf.getvalue()).decode()
         caption = get_caption(b64)
         boxes = get_layout(model, price)
+        boxes.append({"role": "caption", "x": 60, "y": 80, "w": 600, "h": 100})  # add caption box
 
     st.success(f"AI Hook: **{caption}**")
     st.json(boxes)
 
-    with st.spinner("Rendering video..."):
-        frames = [draw_frame(i/FPS, img, boxes, price, contact, caption) for i in range(DURATION * FPS)]
+    with st.spinner("Rendering Canva-style video..."):
+        frames = [draw_frame(i / FPS, img, boxes, price, contact, caption, template_choice) for i in range(DURATION * FPS)]
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         imageio.imwrite(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
@@ -153,6 +261,6 @@ if generate:
 
     st.video(video_path)
     with open(video_path, "rb") as f:
-        st.download_button("Download MP4", f, f"{model.replace(' ', '_')}_ad.mp4", "video/mp4")
+        st.download_button("Download Canva MP4", f, f"{model.replace(' ', '_')}_canva.mp4", "video/mp4")
 
     st.balloons()
