@@ -183,7 +183,7 @@ def draw_frame(t, img, boxes, price, contact, caption, template):
 
     # 2. Soft background copy (parallax)
     if img:
-        bg = img.resize((WIDTH, int(HEIGHT * 0.55)), Image.LANCZOS)).filter(ImageFilter.GaussianBlur(12))
+        bg = img.resize((WIDTH, int(HEIGHT * 0.55)), Image.LANCZOS).filter(ImageFilter.GaussianBlur(12))
         offset = int(T["parallax"] * WIDTH * math.sin(t * math.pi / DURATION))
         canvas.paste(bg, (offset, int(HEIGHT * 0.22)), bg.convert("RGBA"))
 
