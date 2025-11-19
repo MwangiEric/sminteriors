@@ -227,4 +227,5 @@ if generate:
         frames = [draw_frame(i / FPS, img, boxes, price, contact, caption, template_choice) for i in range(DURATION * FPS)]
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        imageio.imwrite(tmp.name, frames, fps=FPS, codec="libxrap
+        imageio.imwrite(tmp.name, frames, fps=FPS, codec="libx264", pixelformat="yuv420p")
+        video_path = tmp.name
