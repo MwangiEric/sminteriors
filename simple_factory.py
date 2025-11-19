@@ -2,145 +2,138 @@ import streamlit as st
 import io, requests, math, tempfile, base64, json, random, time, os
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
-from moviepy.editor import ImageSequenceClip, AudioFileClip, CompositeAudioClip
+from moviepy.editor import ImageSequenceClip, AudioFileClip
 
-# --- GLOBAL CONFIG ---
-st.set_page_config(page_title="S&M Canva Factory Pro", layout="wide", page_icon="🎬")
+# --- GLOBAL CONFIGURATION ---
+st.set_page_config(page_title="AdGen Pro: AI Video Factory", layout="wide", page_icon="🎬")
 
-# --- ASSETS & CONSTANTS ---
+# --- CONSTANTS ---
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
 
-# Royalty-free background tracks (Hosted MP3 examples)
+# Royalty-free music tracks
 MUSIC_TRACKS = {
     "Upbeat Pop": "https://cdn.pixabay.com/audio/2024/05/24/audio_16709e7558.mp3",
     "Luxury Chill": "https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf07a.mp3",
     "High Energy": "https://cdn.pixabay.com/audio/2024/01/16/audio_e2b992254f.mp3"
 }
 
+# --- API SETUP ---
 if "mistral_key" not in st.secrets:
     st.error("🚨 Missing Secret: Add `mistral_key` to your .streamlit/secrets.toml")
     st.stop()
 
 HEADERS = {"Authorization": f"Bearer {st.secrets['mistral_key']}", "Content-Type": "application/json"}
 
-# --- ROBUST FONT LOADER ---
+# --- RESOURCE LOADING ---
 @st.cache_resource
-def load_fonts():
-    """Loads a nice Google Font dynamically to ensure it works on Cloud & Local"""
-    font_url = "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Bold.ttf"
+def load_font_from_web():
+    """Downloads a bold font to memory to avoid path errors."""
+    url = "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Bold.ttf"
     try:
-        r = requests.get(font_url, timeout=5)
+        r = requests.get(url, timeout=5)
         return io.BytesIO(r.content)
     except:
-        return None # Fallback to default
+        return None
 
-FONT_BYTES = load_fonts()
+FONT_FILE = load_font_from_web()
 
 def get_font(size):
-    if FONT_BYTES:
-        return ImageFont.truetype(FONT_BYTES, size)
-    else:
-        return ImageFont.load_default()
+    if FONT_FILE:
+        return ImageFont.truetype(FONT_FILE, size)
+    return ImageFont.load_default()
 
-# --- ADVANCED ANIMATION MATH ---
+# --- MATH & ANIMATION ---
 def ease_out_elastic(t):
-    """Elastic bounce effect for popping elements"""
+    """Bouncy animation effect."""
     c4 = (2 * math.pi) / 3
     if t == 0: return 0
     if t == 1: return 1
     return math.pow(2, -10 * t) * math.sin((t * 10 - 0.75) * c4) + 1
 
 def linear_fade(t, start, duration):
-    """Returns 0.0 to 1.0 alpha based on time"""
+    """Helper for fading elements in."""
     if t < start: return 0.0
     if t > start + duration: return 1.0
     return (t - start) / duration
 
-# --- TEMPLATES (Refined) ---
+# --- TEMPLATES ---
 TEMPLATES = {
     "Midnight Luxury": {
         "bg_grad": ["#0f0c29", "#302b63", "#24243e"],
-        "accent": "#FFD700", # Gold
-        "text": "#FFFFFF",
-        "price_bg": "#FFD700",
-        "price_text": "#000000",
-        "font_scale": 1.0
+        "accent": "#FFD700", "text": "#FFFFFF", 
+        "price_bg": "#FFD700", "price_text": "#000000"
     },
     "Clean Corporate": {
         "bg_grad": ["#ffffff", "#dfe9f3"],
-        "accent": "#2980b9", # Blue
-        "text": "#2c3e50",
-        "price_bg": "#2980b9",
-        "price_text": "#ffffff",
-        "font_scale": 0.9
+        "accent": "#2980b9", "text": "#2c3e50", 
+        "price_bg": "#2980b9", "price_text": "#ffffff"
     },
     "Neon Vibrant": {
         "bg_grad": ["#434343", "#000000"],
-        "accent": "#00ff99", # Neon Green
-        "text": "#ffffff",
-        "price_bg": "#00ff99",
-        "price_text": "#000000",
-        "font_scale": 1.1
+        "accent": "#00ff99", "text": "#ffffff", 
+        "price_bg": "#00ff99", "price_text": "#000000"
     }
 }
 
-# --- AI HELPERS ---
-def ask_mistral(payload):
-    try:
-        r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        st.error(f"AI Error: {e}")
-        st.stop()
+# --- AI LOGIC (WITH RETRY & FALLBACK) ---
+def ask_mistral_safe(payload, retries=3):
+    """Robust API caller that handles 429 errors automatically."""
+    base_delay = 2
+    for attempt in range(retries):
+        try:
+            r = requests.post("https://api.mistral.ai/v1/chat/completions", json=payload, headers=HEADERS, timeout=20)
+            
+            if r.status_code == 429:
+                wait = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                time.sleep(wait)
+                continue
+                
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"API Failed finally: {e}")
+                return None
+    return None
 
-@st.cache_data(show_spinner=False)
-def get_smart_layout(model, price):
-    """Asks LLM for optimal layout coordinates"""
+def get_layout_safe(model):
     prompt = f"""
-    Canvas size: {WIDTH}x{HEIGHT}.
-    I need a JSON layout for a vertical video ad.
+    Canvas: {WIDTH}x{HEIGHT}.
     Roles: 'logo', 'product', 'price', 'contact', 'caption'.
     Product: {model}
-    
-    Rules:
-    1. Logo: Top center or top left.
-    2. Product: Large, center/upper-center.
-    3. Caption: Just below product.
-    4. Price: Big badge near bottom.
-    5. Contact: Very bottom.
-    
-    Return JSON list of objects: {{ "role": "...", "x": int, "y": int, "w": int, "h": int }}
-    NO MARKDOWN. ONLY JSON.
+    Return JSON list: {{ "role": "...", "x": int, "y": int, "w": int, "h": int }}
+    NO MARKDOWN.
     """
     payload = {
         "model": "mistral-large-latest",
         "messages": [{"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"} 
     }
+    
+    # Hardcoded Fallback Layout (Used if AI fails)
+    fallback = [
+        {"role": "logo", "x": 50, "y": 50, "w": 200, "h": 100},
+        {"role": "product", "x": 60, "y": 200, "w": 600, "h": 600},
+        {"role": "caption", "x": 60, "y": 850, "w": 600, "h": 100},
+        {"role": "price", "x": 160, "y": 1000, "w": 400, "h": 120},
+        {"role": "contact", "x": 60, "y": 1180, "w": 600, "h": 60}
+    ]
+    
+    resp = ask_mistral_safe(payload)
+    if not resp: return fallback
+    
     try:
-        resp = ask_mistral(payload)
         data = json.loads(resp)
-        # Mistral sometimes wraps it in a wrapper key
         if "layout" in data: return data["layout"]
         if isinstance(data, list): return data
-        # Fallback if structure is weird
-        raise ValueError("Invalid JSON")
+        return fallback
     except:
-        # Robust Fallback Layout
-        return [
-            {"role": "logo", "x": 40, "y": 40, "w": 200, "h": 100},
-            {"role": "product", "x": 60, "y": 180, "w": 600, "h": 600},
-            {"role": "caption", "x": 60, "y": 800, "w": 600, "h": 150},
-            {"role": "price", "x": 160, "y": 1000, "w": 400, "h": 120},
-            {"role": "contact", "x": 60, "y": 1180, "w": 600, "h": 60}
-        ]
+        return fallback
 
-@st.cache_data(show_spinner=False)
-def get_hook(img_b64):
+def get_hook_safe(img_b64):
     payload = {
         "model": "pixtral-12b-2409",
         "messages": [{"role": "user", "content": [
@@ -149,31 +142,12 @@ def get_hook(img_b64):
         ]}],
         "max_tokens": 50
     }
-    return ask_mistral(payload).replace('"', '')
+    resp = ask_mistral_safe(payload)
+    return resp.replace('"', '') if resp else "Don't Miss This Deal! 🔥"
 
-# --- GRAPHICS ENGINE ---
-
-def draw_gradient(draw, colors, h):
-    # Simple linear interpolation between 2 or 3 colors
-    # Optimisation: We compute this once per frame type if needed, but simple math is fast enough
-    steps = len(colors) - 1
-    for y in range(h):
-        ratio = y / h
-        idx = int(ratio * steps)
-        idx = min(idx, steps - 1)
-        local_ratio = (ratio * steps) - idx
-        
-        c1 = tuple(int(colors[idx][i:i+2], 16) for i in (1, 3, 5))
-        c2 = tuple(int(colors[idx+1][i:i+2], 16) for i in (1, 3, 5))
-        
-        r = int(c1[0] + (c2[0] - c1[0]) * local_ratio)
-        g = int(c1[1] + (c2[1] - c1[1]) * local_ratio)
-        b = int(c1[2] + (c2[2] - c1[2]) * local_ratio)
-        
-        draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
-
-def draw_wrapped_text(draw, text, box, font, color, align="center"):
-    """Pro-level text wrapper"""
+# --- RENDERING ENGINE ---
+def draw_wrapped_text(draw, text, box, font, color):
+    """Fits text inside a box automatically."""
     lines = []
     words = text.split()
     line = ""
@@ -192,53 +166,59 @@ def draw_wrapped_text(draw, text, box, font, color, align="center"):
     
     for l in lines:
         bbox = draw.textbbox((0,0), l, font=font)
-        lw = bbox[2]
-        lx = box['x'] + (box['w'] - lw) // 2
+        lx = box['x'] + (box['w'] - bbox[2]) // 2
         draw.text((lx, current_y), l, font=font, fill=color)
         current_y += bbox[3] + 10
 
 def create_frame(t, img, boxes, data, template_name):
     T = TEMPLATES[template_name]
     
-    # 1. Base Canvas
+    # 1. Background Gradient
     canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
-    draw_gradient(draw, T["bg_grad"], HEIGHT)
     
-    # 2. Parallax Background (Blurred)
+    # Draw gradient manually
+    colors = T["bg_grad"]
+    steps = len(colors) - 1
+    for y in range(HEIGHT):
+        ratio = y / HEIGHT
+        idx = min(int(ratio * steps), steps - 1)
+        local_ratio = (ratio * steps) - idx
+        c1 = tuple(int(colors[idx][i:i+2], 16) for i in (1, 3, 5))
+        c2 = tuple(int(colors[idx+1][i:i+2], 16) for i in (1, 3, 5))
+        r = int(c1[0] + (c2[0] - c1[0]) * local_ratio)
+        g = int(c1[1] + (c2[1] - c1[1]) * local_ratio)
+        b = int(c1[2] + (c2[2] - c1[2]) * local_ratio)
+        draw.line([(0, y), (WIDTH, y)], fill=(r, g, b))
+    
+    # 2. Parallax Blur Background
     if img:
-        bg_scale = 1.1
-        bg_w, bg_h = int(WIDTH * bg_scale), int(HEIGHT * 0.6 * bg_scale)
+        bg_w = int(WIDTH * 1.1)
+        bg_h = int(HEIGHT * 0.6)
         bg_img = img.resize((bg_w, bg_h)).filter(ImageFilter.GaussianBlur(15))
+        off_x = int((WIDTH - bg_w) // 2 + math.sin(t) * 15)
         
-        # Parallax Math
-        offset_x = int((WIDTH - bg_w) // 2 + (math.sin(t) * 20))
-        offset_y = 200
-        
-        # Fade in background
-        bg_alpha = int(255 * 0.4 * linear_fade(t, 0, 1))
+        bg_alpha = int(255 * 0.3 * linear_fade(t, 0, 1))
         bg_img.putalpha(bg_alpha)
-        canvas.paste(bg_img, (offset_x, offset_y), bg_img)
+        canvas.paste(bg_img, (off_x, 200), bg_img)
 
-    # 3. Process Elements from JSON Layout
+    # 3. Render Elements
     for b in boxes:
         role = b["role"]
         
         if role == "logo":
-            # Download logo once in main loop ideally, but cached by OS here usually fine
             try:
                 logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
                 aspect = logo.width / logo.height
-                nh = b['h']
-                nw = int(nh * aspect)
-                logo = logo.resize((nw, nh), Image.LANCZOS)
+                nw = int(b['h'] * aspect)
+                logo = logo.resize((nw, b['h']), Image.LANCZOS)
                 canvas.paste(logo, (b['x'], b['y']), logo)
-            except: pass
+            except: pass # Skip logo if fetch fails
 
         elif role == "product":
-            # Scale animation (Elastic pop at 0.5s)
-            scale = ease_out_elastic(max(0, t - 0.5)) 
-            scale = min(scale, 1.0) # Clamp
+            # Elastic Pop
+            scale = ease_out_elastic(max(0, t - 0.5))
+            scale = min(max(scale, 0), 1.0) # Clamp
             
             if scale > 0.01:
                 pw, ph = int(b['w'] * scale), int(b['h'] * scale)
@@ -246,156 +226,125 @@ def create_frame(t, img, boxes, data, template_name):
                 
                 # Shadow
                 shadow = p_img.copy()
-                # Make shadow black
-                shadow_data = shadow.getdata()
-                new_data = [(0,0,0, int(a*0.3)) for r,g,b,a in shadow_data]
-                shadow.putdata(new_data)
+                shadow_data = [(0,0,0, int(a*0.3)) for r,g,b,a in p_img.getdata()]
+                shadow.putdata(shadow_data)
                 shadow = shadow.filter(ImageFilter.GaussianBlur(10))
                 
-                # Center logic
                 cx = b['x'] + (b['w'] - pw) // 2
                 cy = b['y'] + (b['h'] - ph) // 2
-                
-                canvas.paste(shadow, (cx+15, cy+15), shadow)
+                canvas.paste(shadow, (cx+10, cy+10), shadow)
                 canvas.paste(p_img, (cx, cy), p_img)
 
-        elif role == "caption":
-            # Typewriter effect
-            if t > 1.5:
-                font = get_font(50)
-                draw_wrapped_text(draw, data["caption"], b, font, T["accent"])
-
         elif role == "price":
-            # Slide up from bottom at 2.0s
-            slide_prog = linear_fade(t, 2.0, 0.5)
-            if slide_prog > 0:
-                y_off = (1 - ease_out_elastic(slide_prog)) * 200
-                
-                # Draw Badge
+            # Slide Up
+            prog = linear_fade(t, 2.0, 0.5)
+            if prog > 0:
+                y_off = (1 - ease_out_elastic(prog)) * 150
                 draw.rounded_rectangle(
                     [b['x'], b['y'] + y_off, b['x']+b['w'], b['y']+b['h'] + y_off], 
                     radius=20, fill=T["price_bg"]
                 )
-                # Draw Text
-                font = get_font(70)
+                font = get_font(60)
                 text_w = draw.textlength(data["price"], font=font)
                 tx = b['x'] + (b['w'] - text_w) // 2
-                ty = b['y'] + (b['h'] - 70) // 2 + y_off - 5
+                ty = b['y'] + (b['h'] - 60) // 2 + y_off - 5
                 draw.text((tx, ty), data["price"], fill=T["price_text"], font=font)
+
+        elif role == "caption":
+            if t > 1.5:
+                font = get_font(45)
+                draw_wrapped_text(draw, data["caption"], b, font, T["accent"])
 
         elif role == "contact":
             if t > 3.0:
-                font = get_font(30)
+                font = get_font(28)
                 draw_wrapped_text(draw, data["contact"], b, font, T["text"])
 
-    # 4. Cinematic Vignette (Top Tier Polish)
-    # Creates a subtle darkening at the edges
-    # (Simulated with a radial gradient logic simply by drawing dark corners)
-    # For performance, we just darken the bottom heavily for text readability
-    
-    # Gradient overlay at bottom
+    # 4. Vignette Overlay (Cinematic Touch)
     overlay = Image.new('RGBA', (WIDTH, int(HEIGHT*0.3)), (0,0,0,0))
-    o_draw = ImageDraw.Draw(overlay)
+    odraw = ImageDraw.Draw(overlay)
     for y in range(overlay.height):
-        alpha = int(200 * (y / overlay.height))
-        o_draw.line([(0, y), (WIDTH, y)], fill=(0,0,0, alpha))
+        alpha = int(180 * (y / overlay.height))
+        odraw.line([(0, y), (WIDTH, y)], fill=(0,0,0, alpha))
     canvas.paste(overlay, (0, HEIGHT - overlay.height), overlay)
 
     return np.array(canvas)
 
-# --- UI & MAIN LOGIC ---
-
-st.title("✨ Top-Tier Ads Factory")
-st.caption("Powered by Mistral AI, Pillow & MoviePy")
-
+# --- MAIN APP UI ---
 with st.sidebar:
-    st.header("🛠️ Setup")
-    u_file = st.file_uploader("Product Image", type=["png", "jpg"])
-    u_model = st.text_input("Product Name", "Aurum SmartWatch")
+    st.title("🛠️ Config")
+    u_file = st.file_uploader("Product Image", type=["png", "jpg", "jpeg"])
+    u_model = st.text_input("Product Name", "Luxury Watch")
     u_price = st.text_input("Price", "$299")
-    u_contact = st.text_input("CTA / Site", "Shop Now @ Aurum.com")
-    
-    st.divider()
-    u_template = st.selectbox("Visual Style", list(TEMPLATES.keys()))
-    u_music = st.selectbox("Background Music", list(MUSIC_TRACKS.keys()))
-    
-    btn_gen = st.button("🎬 Render Video", type="primary")
+    u_contact = st.text_input("CTA", "Shop Now")
+    u_template = st.selectbox("Style", list(TEMPLATES.keys()))
+    u_music = st.selectbox("Music", list(MUSIC_TRACKS.keys()))
+    btn_run = st.button("🚀 Generate Video", type="primary")
 
-if btn_gen and u_file:
-    # PREPARATION
-    status = st.status("🚀 Starting Engine...", expanded=True)
+st.title("🎬 AdGen Pro: Top-Tier Video Factory")
+
+if btn_run and u_file:
+    status = st.status("Processing...", expanded=True)
     
+    # 1. Load Image
     img = Image.open(u_file).convert("RGBA")
     
-    # 1. AI GEN
-    status.write("🧠 Dreaming up captions (Pixtral)...")
+    # 2. AI Operations (With Safety Nets)
+    status.write("🧠 Generating Hook & Layout...")
     buf = io.BytesIO(); img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
-    caption = get_hook(b64)
+    
+    # Parallel-ish fetching (Sequence in Streamlit)
+    caption = get_hook_safe(b64)
+    layout = get_layout_safe(u_model)
+    
     status.write(f"✅ Hook: {caption}")
     
-    status.write("📐 Calculating pixel-perfect layout (Mistral)...")
-    layout_boxes = get_smart_layout(u_model, u_price)
-    
-    # Data Packet
-    render_data = {
-        "caption": caption,
-        "price": u_price,
-        "contact": u_contact
-    }
-
-    # 2. FRAME RENDERING
-    status.write("🎨 Painting frames...")
+    # 3. Render Frames
+    status.write("🎨 Rendering frames...")
     frames = []
-    prog_bar = status.progress(0)
+    data = {"caption": caption, "price": u_price, "contact": u_contact}
     
-    total_frames = FPS * DURATION
-    for i in range(total_frames):
-        t = i / FPS
-        frame_pixels = create_frame(t, img, layout_boxes, render_data, u_template)
-        frames.append(frame_pixels)
-        prog_bar.progress((i+1) / total_frames)
+    bar = status.progress(0)
+    total = FPS * DURATION
+    for i in range(total):
+        frames.append(create_frame(i/FPS, img, layout, data, u_template))
+        bar.progress((i+1)/total)
         
-    # 3. VIDEO ASSEMBLY (MoviePy)
-    status.write("🎼 Mixing audio & encoding (MoviePy)...")
-    
-    # Create video clip
+    # 4. Encode Video
+    status.write("🎼 Mixing Audio & Encoding...")
     clip = ImageSequenceClip(frames, fps=FPS)
     
-    # Add Audio
     try:
-        # Download audio to temp file
-        audio_url = MUSIC_TRACKS[u_music]
-        audio_resp = requests.get(audio_url)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f_aud:
-            f_aud.write(audio_resp.content)
-            audio_path = f_aud.name
-            
-        audio_clip = AudioFileClip(audio_path).subclip(0, DURATION)
-        # Fade out audio at end
-        audio_clip = audio_clip.audio_fadeout(1)
+        # Audio Handling
+        aud_url = MUSIC_TRACKS[u_music]
+        r_aud = requests.get(aud_url)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tf:
+            tf.write(r_aud.content)
+            tf_path = tf.name
         
-        final_clip = clip.set_audio(audio_clip)
+        audioclip = AudioFileClip(tf_path).subclip(0, DURATION).audio_fadeout(1)
+        final_clip = clip.set_audio(audioclip)
     except Exception as e:
-        st.warning(f"Audio failed ({e}), rendering silent video.")
+        st.warning(f"Audio failed ({e}), using silent video.")
         final_clip = clip
-
-    # Write File
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f_out:
-        final_clip.write_videofile(f_out.name, codec="libx264", audio_codec="aac", logger=None)
-        video_path = f_out.name
-
+        
+    # Save output
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as vf:
+        final_clip.write_videofile(vf.name, codec="libx264", audio_codec="aac", logger=None)
+        out_path = vf.name
+        
     status.update(label="✨ Done!", state="complete", expanded=False)
+    
+    # 5. Display
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.video(out_path)
+    with col2:
+        st.success("Ad Generated!")
+        st.info(f"Hook: {caption}")
+        with open(out_path, "rb") as f:
+            st.download_button("⬇️ Download MP4", f, "ad_pro.mp4")
 
-    # 4. RESULT
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        st.video(video_path)
-    with c2:
-        st.success("Your ad is ready!")
-        st.info(f"**Hook Used:** {caption}")
-        with open(video_path, "rb") as v_file:
-            st.download_button("⬇️ Download MP4", v_file, "ad_toptier.mp4")
-
-elif btn_gen and not u_file:
-    st.error("Please upload an image first.")
+elif btn_run:
+    st.error("Upload an image first!")
