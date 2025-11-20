@@ -91,21 +91,21 @@ TEMPLATES = {
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
         "graphic_type": "none"
     },
-    "Brand Diagonal Slice": { # Inspired by Image 1 (Diagonal stripes)
+    "Brand Diagonal Slice": { 
         "bg_grad": [BRAND_PRIMARY, "#3e2e24"], 
         "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
         "graphic_type": "diagonal",
         "graphic_color": BRAND_ACCENT 
     },
-    "Brand Circular Flow": { # Inspired by Image 2 & 3 (Circles)
+    "Brand Circular Flow": { 
         "bg_grad": [BRAND_PRIMARY, "#332A22"], 
         "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
         "graphic_type": "circular",
         "graphic_color": BRAND_ACCENT 
     },
-    "Brand Split Panel": { # Inspired by Image 4 (Bottom Panel)
+    "Brand Split Panel": { 
         "bg_grad": [BRAND_PRIMARY, BRAND_PRIMARY], 
         "accent": BRAND_TEXT_LIGHT, "text": BRAND_TEXT_LIGHT, 
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
@@ -122,24 +122,33 @@ def ask_groq(payload):
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"Groq Error: {e}")
+        # Improved error reporting for API issues
+        if hasattr(e, 'response') and e.response is not None:
+             print(f"Groq HTTP Error: {e.response.status_code} {e.response.reason} for URL: {e.response.url}")
+        else:
+            print(f"Groq Error: {e}")
         return None
 
-def get_data_groq(img_b64, model_name):
+def get_data_groq(img, model_name):
     """Gets caption (Vision) and layout (Logic) from Groq."""
     
-    # 1. Vision Task (Llama 3.2 Vision Preview) for caption
+    # 1. Base64 Encoding for Vision (Using JPEG for robustness)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90) 
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    
+    # 2. Vision Task (Llama 3.2 Vision Preview) for caption
     p_hook = {
         "model": "llama-3.2-11b-vision-preview",
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": f"Write a 4-word catchy luxury ad hook for this furniture model '{model_name}'."},
-            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
         ]}],
         "temperature": 0.7,
         "max_tokens": 30
     }
     
-    # 2. Logic Task (Llama 3 70B) for layout
+    # 3. Logic Task (Llama 3 70B) for layout
     p_layout = {
         "model": "llama3-70b-8192",
         "messages": [
@@ -175,7 +184,7 @@ def get_data_groq(img_b64, model_name):
         return caption, default_layout
 
 # =========================================================================
-# === NEW CONTENT GENERATION LOGIC ===
+# === UPDATED CONTENT GENERATION LOGIC (Added Maintenance Tips) ===
 
 def generate_tips(content_type, keyword="interior design"):
     """Generates a list of content ideas (tips) using Groq."""
@@ -190,6 +199,9 @@ def generate_tips(content_type, keyword="interior design"):
         user_prompt = f"Generate 5 high-value tips on how to properly care for, arrange, or choose high-end furniture (like the '{keyword}' product). Focus on luxury, longevity, and placement."
     elif content_type == "Interior Design Tips":
         user_prompt = f"Generate 5 creative and trending interior design tips or small-space hacks related to the theme of '{keyword}'. Focus on quick visual improvements and style."
+    # --- NEW: Maintenance Tips ---
+    elif content_type == "Maintenance Tips":
+        user_prompt = f"Generate 5 essential tips on cleaning, polishing, and long-term maintenance for luxury furniture materials like solid wood, brass, and fine upholstery, focused on the product '{keyword}'. The tips must be specific and actionable for a short video."
     else:
         return "*Select a content type to generate ideas.*"
 
@@ -203,15 +215,14 @@ def generate_tips(content_type, keyword="interior design"):
         "max_tokens": 1024
     }
     
-    # Display loading while generating
     with st.spinner(f"🧠 Groq is generating {content_type} ideas..."):
         return ask_groq(payload)
 
-# === END NEW CONTENT GENERATION LOGIC ===
+# === END UPDATED CONTENT GENERATION LOGIC ===
 # =========================================================================
 
 
-# --- RENDERING UTILITIES (No change needed here) ---
+# --- RENDERING UTILITIES ---
 def draw_wrapped_text(draw, text, box, font, color, align="center"):
     lines = []
     words = text.split()
@@ -385,11 +396,11 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # === NEW: CONTENT GENERATOR SECTION ===
+    # === UPDATED: CONTENT GENERATOR SECTION (Added Maintenance Tips) ===
     st.header("💡 Content Idea Generator")
     u_content_type = st.radio(
         "Select Content Type:",
-        ["DIY Tips", "Furniture Tips", "Interior Design Tips"]
+        ["DIY Tips", "Furniture Tips", "Interior Design Tips", "Maintenance Tips"] # NEW OPTION ADDED
     )
     u_content_keyword = st.text_input("Content Focus (e.g., 'Small living room')", value="Mid-Century Console")
     btn_content = st.button("🧠 Generate Tips")
@@ -418,7 +429,7 @@ if st.session_state.show_content and btn_content:
         st.error("Could not retrieve tips. Check your Groq key or try again.")
     
     st.markdown("---")
-    st.session_state.show_content = False # Reset flag
+    st.session_state.show_content = False 
 
 # 2. VIDEO AD GENERATION LOGIC
 if btn_ad and u_file:
@@ -434,11 +445,10 @@ if btn_ad and u_file:
     
     # 2. Groq AI for Hook & Layout
     status.write("🚀 Groq AI: Crafting Ad Copy & Layout...")
-    buf = io.BytesIO(); pro_img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode()
     
     start_time = time.time()
-    caption, layout = get_data_groq(b64, u_model)
+    # Note: Using the corrected call with the PIL Image object (pro_img)
+    caption, layout = get_data_groq(pro_img, u_model)
     end_time = time.time()
     
     status.write(f"✅ Groq AI Response Time: {round(end_time-start_time, 2)}s")
