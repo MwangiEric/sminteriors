@@ -1,424 +1,537 @@
 import streamlit as st
-import io, requests, math, tempfile, base64, json, os, time
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
+import io, requests, math, tempfile, base64, json, random, time, os
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import numpy as np
 from moviepy.editor import ImageSequenceClip, AudioFileClip
-from rembg import remove, new_session
+from rembg import remove
 
-# ================================
-# PAGE CONFIG
-# ================================
-st.set_page_config(page_title="AdGen EVO: SM Interiors", layout="wide", page_icon="✨")
+# --- GLOBAL CONFIGURATION ---
+st.set_page_config(page_title="AdGen EVO: Content & Ads", layout="wide", page_icon="✨")
 
+# --- CONSTANTS ---
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
-LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
+LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037" 
 
-# Direct, fast, royalty-free music (Pixabay + Uppbeat)
+# --- ASSETS ---
 MUSIC_TRACKS = {
-    "Luxury Gold": "https://cdn.pixabay.com/download/audio/2024/03/22/audio_2d5f2b79e5.mp3?filename=luxury-background-211023.mp3",
-    "Elegant Piano": "https://cdn.pixabay.com/download/audio/2023/09/25/audio_5e65e1f48d.mp3?filename=elegant-piano-logo-174988.mp3",
-    "Modern Beat": "https://cdn.pixabay.com/download/audio/2024/08/15/audio_5a54d0f2f6.mp3?filename=upbeat-background-171614.mp3",
-    "Chill Luxury": "https://cdn.pixabay.com/download/audio/2023/11/08/audio_2d3c1e6d7f.mp3?filename=chill-abstract-intention-120363.mp3"
+    "Upbeat Pop": "https://archive.org/download/Bensound_-_Jazzy_Frenchy/Bensound_-_Jazzy_Frenchy.mp3",
+    "Luxury Chill": "https://archive.org/download/bensound-adaytoremember/bensound-adaytoremember.mp3",
+    "Modern Beats": "https://archive.org/download/bensound-sweet/bensound-sweet.mp3"
 }
 
-# ================================
-# SECRETS
-# ================================
+# --- AUTH ---
 if "groq_key" not in st.secrets:
-    st.error("Missing `groq_key` in Streamlit Secrets! Add it under Settings → Secrets.")
+    st.error("🚨 Missing Secret: Add `groq_key` to your .streamlit/secrets.toml")
     st.stop()
 
-HEADERS = {"Authorization": f"Bearer {st.secrets['groq_key']}", "Content-Type": "application/json"}
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-
-# ================================
-# CACHED RESOURCES
-# ================================
-@st.cache_resource
-def get_rembg_session():
-    return new_session()
-
-@st.cache_resource
-def get_cached_logo(_url):
-    try:
-        r = requests.get(_url, timeout=10)
-        r.raise_for_status()
-        img = Image.open(io.BytesIO(r.content)).convert("RGBA")
-        return img.resize((250, 125), Image.LANCZOS)  # Pre-resize for speed
-    except:
-        st.warning("Logo failed to load – using placeholder.")
-        return Image.new("RGBA", (250, 125), (255, 255, 255, 180))
-
-# ================================
-# SAFE LAYOUT SANITIZER (CRITICAL FIX)
-# ================================
-def sanitize_layout(layout):
-    sanitized = []
-    for item in layout:
-        sanitized.append({
-            "role": item.get("role", "unknown"),
-            "x": int(round(item.get("x", 0))),
-            "y": int(round(item.get("y", 0))),
-            "w": int(round(item.get("w", 100))),
-            "h": int(round(item.get("h", 100)))
-        })
-    return sanitized
-
-# Default premium layout (Reels-optimized)
-DEFAULT_LAYOUT = sanitize_layout([
-    {"role": "logo", "x": 40, "y": 40, "w": 240, "h": 120},
-    {"role": "product", "x": 0, "y": 160, "w": 720, "h": 780},
-    {"role": "caption", "x": 60, "y": 920, "w": 600, "h": 160},
-    {"role": "price", "x": 60, "y": 1090, "w": 600, "h": 140},
-    {"role": "contact", "x": 60, "y": 1230, "w": 600, "h": 60}
-])
-
-# ================================
-# IMAGE PROCESSING
-# ================================
-def process_image_pro(input_image):
-    with st.spinner("Removing background & enhancing..."):
-        buf = io.BytesIO()
-        input_image.save(buf, format="PNG")
-        output = remove(buf.getvalue(), session=get_rembg_session())
-        img = Image.open(io.BytesIO(output)).convert("RGBA")
-
-        # Enhance
-        img = ImageEnhance.Contrast(img).enhance(1.2)
-        img = ImageEnhance.Sharpness(img).enhance(1.6)
-        img = ImageEnhance.Color(img).enhance(1.1)
-
-        # Smart auto-center crop
-        alpha = img.getchannel("A")
-        bbox = alpha.getbbox()
-        if bbox:
-            cropped = img.crop(bbox)
-            ratio = cropped.width / cropped.height
-            target_ratio = 1.0
-            if ratio > target_ratio:
-                new_h = int(cropped.width / target_ratio)
-                pad = (new_h - cropped.height) // 2
-                bg = Image.new("RGBA", (cropped.width, new_h), (0,0,0,0))
-                bg.paste(cropped, (0, pad))
-                img = bg
-            else:
-                new_w = int(cropped.height * target_ratio)
-                pad = (new_w - cropped.width) // 2
-                bg = Image.new("RGBA", (new_w, cropped.height), (0,0,0,0))
-                bg.paste(cropped, (pad, 0))
-                img = bg
-
-        return img.resize((680, 680), Image.LANCZOS)
-
-# ================================
-# FONTS
-# ================================
-def get_font(size):
-    for font_path in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf", "DejaVuSans.ttf"]:
-        try:
-            return ImageFont.truetype(font_path, size)
-        except:
-            continue
-    return ImageFont.load_default()
-
-# ================================
-# ANIMATION MATH
-# ================================
-def ease_out_elastic(t):
-    if t <= 0: return 0
-    if t >= 1: return 1
-    c4 = (2 * math.pi) / 3
-    return pow(2, -10 * t) * math.sin((t * 10 - 0.75) * c4) + 1
-
-# ================================
-# BRAND TEMPLATES
-# ================================
-BRAND_PRIMARY = "#4C3B30"
-BRAND_ACCENT = "#D4AF37"  # True gold
-
-TEMPLATES = {
-    "SM Classic":    {"bg_grad": ["#4C3B30", "#2A1F1B"], "accent": BRAND_ACCENT, "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "none"},
-    "Gold Diagonal": {"bg_grad": ["#4C3B30", "#3E2E24"], "accent": BRAND_ACCENT, "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "diagonal", "graphic_color": BRAND_ACCENT},
-    "Gold Circles":  {"bg_grad": ["#332A22", "#4C3B30"], "accent": BRAND_ACCENT, "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "circular", "graphic_color": BRAND_ACCENT},
-    "Gold Horizon":  {"bg_grad": ["#4C3B30", "#4C3B30"], "accent": "#FFFFFF",   "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "split", "graphic_color": BRAND_ACCENT},
+# Groq API Endpoint & Headers
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {st.secrets['groq_key']}",
+    "Content-Type": "application/json"
 }
 
-# ================================
-# GROQ HELPERS
-# ================================
+# --- IMAGE PROCESSING ENGINE (Rembg + Enhance) ---
+def process_image_pro(input_image):
+    """Removes Background via Rembg and applies sharpness/contrast enhancements."""
+    with st.spinner("🚿 Removing background & enhancing..."):
+        img_byte_arr = io.BytesIO()
+        input_image.save(img_byte_arr, format='PNG') 
+        input_image_bytes = img_byte_arr.getvalue()
+        
+        output_bytes = remove(input_image_bytes)
+        clean_img = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
+
+    enhancer = ImageEnhance.Contrast(clean_img)
+    clean_img = enhancer.enhance(1.15)
+    
+    enhancer = ImageEnhance.Sharpness(clean_img)
+    clean_img = enhancer.enhance(1.5)
+    
+    return clean_img
+
+# --- FONTS (Stable Local) ---
+def get_font(size):
+    """Loads a common bold font from system paths for stability."""
+    possible_fonts = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "arial.ttf"
+    ]
+    for path in possible_fonts:
+        try:
+            return ImageFont.truetype(path, size)
+        except: pass
+    return ImageFont.load_default()
+
+# --- MATH & ANIMATION ---
+def ease_out_elastic(t):
+    """Elastic easing function for animated entry."""
+    c4 = (2 * math.pi) / 3
+    return math.pow(2, -10 * t) * math.sin((t * 10 - 0.75) * c4) + 1 if t > 0 and t < 1 else (0 if t<=0 else 1)
+
+def linear_fade(t, start, duration):
+    """Linear fade in/out function."""
+    if t < start: return 0.0
+    if t > start + duration: return 1.0
+    return (t - start) / duration
+
+# --- TEMPLATES (Dynamic Brand Color Palettes) ---
+BRAND_PRIMARY = "#4C3B30" # Deep Brown
+BRAND_ACCENT = "#D2A544"  # Gold
+BRAND_TEXT_LIGHT = "#FFFFFF" # White
+BRAND_TEXT_DARK = "#000000"  # Black
+
+TEMPLATES = {
+    "SM Interiors Basic": { 
+        "bg_grad": [BRAND_PRIMARY, "#2a201b"], 
+        "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
+        "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
+        "graphic_type": "none"
+    },
+    "Brand Diagonal Slice": { 
+        "bg_grad": [BRAND_PRIMARY, "#3e2e24"], 
+        "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
+        "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
+        "graphic_type": "diagonal",
+        "graphic_color": BRAND_ACCENT 
+    },
+    "Brand Circular Flow": { 
+        "bg_grad": [BRAND_PRIMARY, "#332A22"], 
+        "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
+        "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
+        "graphic_type": "circular",
+        "graphic_color": BRAND_ACCENT 
+    },
+    "Brand Split Panel": { 
+        "bg_grad": [BRAND_PRIMARY, BRAND_PRIMARY], 
+        "accent": BRAND_TEXT_LIGHT, "text": BRAND_TEXT_LIGHT, 
+        "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
+        "graphic_type": "split",
+        "graphic_color": BRAND_ACCENT 
+    }
+}
+
+# --- GROQ AI LOGIC ---
 def ask_groq(payload):
+    """Sends payload to Groq API and handles response/errors."""
     try:
-        r = requests.post(f"{GROQ_BASE_URL}/chat/completions", json=payload, headers=HEADERS, timeout=15)
+        r = requests.post(GROQ_URL, json=payload, headers=HEADERS, timeout=10)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.HTTPError as e:
+        st.error(f"Groq API error {e.response.status_code}: {e.response.text[:300]}")
+        return None
     except Exception as e:
-        st.error(f"Groq error: {e}")
+        st.error(f"Request failed: {e}")
         return None
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_hook_and_layout(_img_bytes, model_name):
-    img = Image.open(io.BytesIO(_img_bytes))
-
-    # Vision hook
+def get_data_groq(img, model_name):
+    """Gets caption (Vision) and layout (Logic) from Groq."""
+    
+    # 1. Base64 Encoding for Vision (Convert RGBA to RGB for JPEG compatibility)
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=85)
+    
+    if img.mode == 'RGBA':
+        rgb_img = Image.new("RGB", img.size, (255, 255, 255))
+        rgb_img.paste(img, (0, 0), img)
+    else:
+        rgb_img = img.convert("RGB")
+        
+    rgb_img.save(buf, format="JPEG", quality=90) 
     b64 = base64.b64encode(buf.getvalue()).decode()
-
-    hook_payload = {
-        "model": "llama-3.2-11b-vision-preview",
+    
+    # 2. Vision Task (updated model)
+    p_hook = {
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": f"Write a short, luxurious 4–7 word ad hook for this {model_name}."},
+            {"type": "text", "text": f"Write a 4-word catchy luxury ad hook for this furniture model '{model_name}'."},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
         ]}],
+        "temperature": 0.7,
         "max_tokens": 30
     }
-    hook = ask_groq(hook_payload) or "Timeless Luxury Redefined"
-
-    # Layout
-    layout_payload = {
+    
+    # 3. Logic Task for layout
+    p_layout = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "Return ONLY valid JSON with a 'layout' array of objects with keys: role, x, y, w, h."},
-            {"role": "user", "content": f"720×1280 vertical ad. Roles: [logo, product, caption, price, contact]. Center product. Product: {model_name}"}
+            {"role": "system", "content": "Output ONLY a valid JSON array of 5 objects. Each with 'role', 'x', 'y', 'w', 'h' (all integers). No extra text."},
+            {"role": "user", "content": f"Design a 720×1280 vertical luxury ad layout. Required roles: logo, product, caption, price, contact. Center the product. Product: {model_name}"}
         ],
         "response_format": {"type": "json_object"},
-        "temperature": 0.4
+        "temperature": 0.3,
+        "max_tokens": 400
     }
-    raw = ask_groq(layout_payload)
+
+    caption = ask_groq(p_hook)
+    caption = caption.replace('"', '') if caption else "Elevate Your Space" 
+    
+    layout_raw = ask_groq(p_layout)
+    
+    # Fallback Layout 
+    default_layout = [
+        {"role": "logo", "x": 50, "y": 50, "w": 200, "h": 100},
+        {"role": "product", "x": 60, "y": 250, "w": 600, "h": 600},
+        {"role": "caption", "x": 60, "y": 900, "w": 600, "h": 100},
+        {"role": "price", "x": 160, "y": 1050, "w": 400, "h": 120},
+        {"role": "contact", "x": 60, "y": 1200, "w": 600, "h": 60}
+    ]
+    
     try:
-        data = json.loads(raw) if raw else {}
-        layout = data.get("layout", data) if isinstance(data, dict) else data
-        if isinstance(layout, list) and len(layout) >= 4:
-            return hook.strip('"'), sanitize_layout(layout)
+        j = json.loads(layout_raw)
+        final_layout = j if isinstance(j, list) else j.get("layout", default_layout)
+        if isinstance(final_layout, list) and len(final_layout) == 5:
+            return caption, sanitize_layout(final_layout)
     except:
         pass
-    return hook.strip('"'), DEFAULT_LAYOUT
+    
+    return caption, default_layout
 
-# ================================
-# CONTENT TIPS
-# ================================
-def generate_tips(content_type, keyword):
-    prompts = {
-        "DIY Tips": f"5 luxury DIY decor ideas using or inspired by '{keyword}'",
-        "Furniture Tips": f"5 expert tips for choosing and caring for high-end furniture like '{keyword}'",
-        "Interior Design Tips": f"5 trending 2025 interior design tips involving '{keyword}'",
-        "Maintenance Tips": f"5 professional cleaning & maintenance tips for luxury wood, brass, velvet & leather"
-    }
+# =========================================================================
+# === UPDATED CONTENT GENERATION LOGIC ===
+# =========================================================================
+
+def generate_tips(content_type, keyword="interior design"):
+    """Generates a list of content ideas (tips) using updated model."""
+    
+    system_prompt = f"""You are a content creation expert for a luxury home furnishing brand named 'SM Interiors'. 
+    Your tone must be authoritative, engaging, and suitable for short-form video content (TikTok/Reels).
+    Respond using only markdown bullet points. Do not include any introductory or concluding sentences."""
+    
+    if content_type == "DIY Tips":
+        user_prompt = f"Generate 5 quick, actionable DIY home decor tips or furniture restoration ideas that use common materials, focusing on high-impact visuals suitable for a video tutorial. The focus keyword is '{keyword}'."
+    elif content_type == "Furniture Tips":
+        user_prompt = f"Generate 5 high-value tips on how to properly care for, arrange, or choose high-end furniture (like the '{keyword}' product). Focus on luxury, longevity, and placement."
+    elif content_type == "Interior Design Tips":
+        user_prompt = f"Generate 5 creative and trending interior design tips or small-space hacks related to the theme of '{keyword}'. Focus on quick visual improvements and style."
+    elif content_type == "Maintenance Tips":
+        user_prompt = f"Generate 5 essential tips on cleaning, polishing, and long-term maintenance for luxury furniture materials like solid wood, brass, and fine upholstery, focused on the product '{keyword}'. The tips must be specific and actionable for a short video."
+    else:
+        return "*Select a content type to generate ideas.*"
+
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.3-70b-versatile", 
         "messages": [
-            {"role": "system", "content": "Reply ONLY with clean markdown bullet points. No intro or sign-off."},
-            {"role": "user", "content": prompts.get(content_type, "Give 5 tips")}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ],
         "temperature": 0.8,
-        "max_tokens": 800
+        "max_tokens": 1024
     }
-    with st.spinner("Generating ideas..."):
-        result = ask_groq(payload)
-    return result or "No response from AI."
+    
+    with st.spinner(f"🧠 Groq AI is generating {content_type} ideas..."):
+        return ask_groq(payload)
 
-# ================================
-# FRAME RENDERER (100% SAFE)
-# ================================
-def safe_paste(target, img, box_xy, mask=None):
-    try:
-        target.paste(img, box_xy, mask or (img.getchannel("A") if img.mode == "RGBA" else None))
-    except:
-        if img.mode != "RGBA":
-            img = img.convert("RGBA")
-        target.paste(img, box_xy, img.split()[-1])
+# === END UPDATED CONTENT GENERATION LOGIC ===
+# =========================================================================
 
-def draw_wrapped_text(draw, text, box, font, color):
+
+# --- RENDERING UTILITIES ---
+def draw_wrapped_text(draw, text, box, font, color, align="center"):
+    """Handles multi-line text wrapping within a bounding box."""
     lines = []
     words = text.split()
     line = ""
-    for word in words:
-        test = line + (" " + word if line else word)
-        if draw.textlength(test, font=font) <= box["w"]:
-            line = test
-        else:
+    for w in words:
+        test_line = line + " " + w if line else w
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        text_width = bbox[2] - bbox[0]
+        
+        if text_width > box['w'] and line: 
             lines.append(line)
-            line = word
-    if line:
-        lines.append(line)
-    y = box["y"]
-    for line in lines:
-        w = draw.textlength(line, font=font)
-        draw.text((box["x"] + (box["w"] - w) / 2, y), line, font=font, fill=color)
-        y += font.getbbox(line)[3] + 12
+            line = w
+        else:
+            line = test_line
+    lines.append(line)
+    
+    current_y = box['y'] 
+    
+    for l in lines:
+        bbox = draw.textbbox((0,0), l, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        if align == "center":
+            lx = box['x'] + (box['w'] - text_width) // 2
+        elif align == "left":
+            lx = box['x']
+        
+        draw.text((lx, current_y), l, font=font, fill=color)
+        current_y += text_height + 5 
 
-def create_frame(t, product_img, boxes, texts, tpl_name, logo_img):
+def create_frame(t, img, boxes, texts, tpl_name):
+    """Draws a single animated frame of the video."""
     T = TEMPLATES[tpl_name]
-    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
-
-    # Gradient background
-    c1 = tuple(int(T["bg_grad"][0].lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
-    c2 = tuple(int(T["bg_grad"][1].lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
+    
+    # 1. Background Gradient
+    c1 = tuple(int(T["bg_grad"][0][i:i+2], 16) for i in (1, 3, 5))
+    c2 = tuple(int(T["bg_grad"][1][i:i+2], 16) for i in (1, 3, 5))
     for y in range(HEIGHT):
-        mix = y / HEIGHT
-        col = tuple(int(c1[i] + (c2[i] - c1[i]) * mix) for i in range(3))
-        draw.line([(0, y), (WIDTH, y)], fill=col)
+        r = int(c1[0] + (c2[0]-c1[0]) * y/HEIGHT)
+        g = int(c1[1] + (c2[1]-c1[1]) * y/HEIGHT)
+        b = int(c1[2] + (c2[2]-c1[2]) * y/HEIGHT)
+        draw.line([(0,y), (WIDTH,y)], fill=(r,g,b))
 
-    # Template graphics
-    if T["graphic_type"] == "diagonal":
-        alpha = int(80 * (t > 0.6))
-        gc = tuple(int(T["graphic_color"].lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
-        for i in range(-WIDTH, WIDTH + HEIGHT, 80):
-            draw.line([(i, 0), (i + HEIGHT, HEIGHT)], fill=(*gc, alpha), width=6)
+    # --- DYNAMIC TEMPLATE GRAPHICS ---
+    graphic_color_rgb = tuple(int(T["graphic_color"][i:i+2], 16) for i in (1, 3, 5)) if "graphic_color" in T else None
 
-    if T["graphic_type"] == "circular":
-        alpha = int(120 * (t > 0.8))
-        gc = tuple(int(T["graphic_color"].lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
-        r = int(600 * ease_out_elastic(max(0, t - 0.6)))
-        draw.ellipse([WIDTH//2 - r, HEIGHT//2 - r, WIDTH//2 + r, HEIGHT//2 + r], outline=(*gc, alpha), width=12)
+    if T["graphic_type"] == "diagonal" and graphic_color_rgb:
+        diag_alpha = int(255 * linear_fade(t, 0.5, 1.0))
+        for i in range(-WIDTH, WIDTH + HEIGHT, 50): 
+            draw.line([(i, 0), (i + HEIGHT, HEIGHT)], fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], diag_alpha), width=10)
+        
+        if t > 0.8:
+            solid_alpha = int(255 * linear_fade(t, 1.0, 0.5))
+            draw.polygon([
+                (0, 100), (WIDTH, 0), (WIDTH, 200), (0, 300)
+            ], fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], solid_alpha))
 
-    if T["graphic_type"] == "split":
-        h = int(HEIGHT * 0.4 * ease_out_elastic(max(0, t - 0.9)))
-        draw.rectangle([0, HEIGHT - h, WIDTH, HEIGHT], fill=T["graphic_color"] + "88")
 
-    # Render elements
+    elif T["graphic_type"] == "circular" and graphic_color_rgb:
+        circle_alpha = int(255 * linear_fade(t, 0.8, 0.7))
+        
+        circle_size = int(WIDTH * 1.5 * ease_out_elastic(max(0, t - 0.5)))
+        cx, cy = int(WIDTH * 0.8), int(HEIGHT * 0.7)
+        draw.ellipse([cx - circle_size//2, cy - circle_size//2, cx + circle_size//2, cy + circle_size//2], 
+                     fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], int(circle_alpha * 0.6)))
+        
+        circle_size_small = int(WIDTH * 0.7 * ease_out_elastic(max(0, t - 1.0)))
+        cx_s, cy_s = int(WIDTH * 0.2), int(HEIGHT * 0.3)
+        
+        draw.ellipse([cx_s - circle_size_small//2, cy_s - circle_size_small//2, 
+                      cx_s + circle_size_small//2, cy_s + circle_size_small//2], 
+                     fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], int(circle_alpha * 0.4)))
+
+
+    elif T["graphic_type"] == "split" and graphic_color_rgb:
+        split_height = int(HEIGHT * 0.3 * ease_out_elastic(max(0, t - 1.0)))
+        draw.rectangle([0, HEIGHT - split_height, WIDTH, HEIGHT], fill=T["graphic_color"])
+        
+        dot_fade = int(255 * linear_fade(t, 1.2, 0.5))
+        dot_color = (graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], dot_fade)
+        for i in range(5):
+            draw.ellipse([WIDTH - 60, 100 + i*40, WIDTH - 40, 120 + i*40], fill=dot_color)
+
+    # 4. Elements
     for b in boxes:
         role = b["role"]
-
+        
         if role == "product":
-            if t < 0.1: continue
-            scale = ease_out_elastic(min(t * 1.4, 1.0)) * (1.0 + 0.15 * (t / DURATION))  # Ken Burns zoom
-            pw, ph = int(b["w"] * scale), int(b["h"] * scale)
-            prod = product_img.resize((pw, ph), Image.LANCZOS)
+            float_y = math.sin(t * 2) * 12
+            scale = ease_out_elastic(min(t, 1.0))
+            
+            if scale > 0.01:
+                pw, ph = int(b['w']*scale), int(b['h']*scale)
+                p_rs = img.resize((pw, ph), Image.LANCZOS)
+                
+                shadow = p_rs.copy()
+                shadow_data = [(0,0,0, int(a*0.3)) for r,g,b,a in p_rs.getdata()]
+                shadow.putdata(shadow_data)
+                shadow = shadow.filter(ImageFilter.GaussianBlur(15))
+                
+                cx = b['x'] + (b['w']-pw)//2
+                cy = b['y'] + (b['h']-ph)//2 + float_y
+                
+                canvas.paste(shadow, (int(cx), int(cy+30)), shadow)
+                canvas.paste(p_rs, (int(cx), int(cy)), p_rs)
 
-            # Shadow
-            shadow = prod.convert("L")
-            shadow = ImageOps.invert(shadow).point(lambda p: p * 0.4)
-            shadow = shadow.convert("RGBA").filter(ImageFilter.GaussianBlur(25))
-            safe_paste(canvas, shadow, (b["x"] + (b["w"] - pw)//2 + 15, b["y"] + (b["h"] - ph)//2 + 50))
+        elif role == "price":
+            anim = linear_fade(t, 1.5, 0.5)
+            if anim > 0:
+                off_y = (1-ease_out_elastic(anim))*100
+                draw.rounded_rectangle([b['x'], b['y']+off_y, b['x']+b['w'], b['y']+b['h']+off_y], radius=25, fill=T["price_bg"])
+                f = get_font(65)
+                
+                draw_wrapped_text(draw, texts["price"], 
+                                  {'x': b['x'], 'y': b['y']+off_y, 'w': b['w'], 'h': b['h']}, 
+                                  f, T["price_text"])
+                
 
-            # Product with subtle float
-            y_offset = int(math.sin(t * 4) * 12)
-            safe_paste(canvas, prod, (b["x"] + (b["w"] - pw)//2, b["y"] + (b["h"] - ph)//2 + y_offset))
+        elif role == "caption":
+            if t > 1.0:
+                f = get_font(50)
+                draw_wrapped_text(draw, texts["caption"], b, f, T["accent"])
 
-        elif role == "caption" and t > 1.0:
-            draw_wrapped_text(draw, texts["caption"], b, get_font(56), T["accent"])
-
-        elif role == "price" and t > 1.5:
-            draw.rounded_rectangle([b["x"], b["y"], b["x"]+b["w"], b["y"]+b["h"]], radius=40, fill=T["price_bg"])
-            draw_wrapped_text(draw, texts["price"], b, get_font(72), T["price_text"])
-
-        elif role == "contact" and t > 2.5:
-            draw_wrapped_text(draw, texts["contact"], b, get_font(36), T["text"])
-
+        elif role == "contact":
+            if t > 2.5:
+                f = get_font(30)
+                draw_wrapped_text(draw, texts["contact"], b, f, T["text"])
+                
         elif role == "logo":
-            if logo_img:
-                canvas.paste(logo_img, (b["x"], b["y"]), logo_img)
+             try:
+                logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
+                logo = logo.resize((b['w'], b['h']), Image.LANCZOS)
+                logo_shadow = Image.new('RGBA', logo.size, (0,0,0,0))
+                logo_shadow_draw = ImageDraw.Draw(logo_shadow)
+                logo_shadow_draw.ellipse([5,5,logo.width-5,logo.height-5], fill=(0,0,0,100))
+                logo_shadow = logo_shadow.filter(ImageFilter.GaussianBlur(10))
 
-    # Final vignette
-    vig = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    vdraw = ImageDraw.Draw(vig  )
+                canvas.paste(logo_shadow, (b['x']+5, b['y']+5), logo_shadow)
+                canvas.paste(logo, (b['x'], b['y']), logo)
+             except: pass
+
+    # 5. Vignette (Cinematic finish)
+    vignette = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    v_draw = ImageDraw.Draw(vignette)
     for y in range(int(HEIGHT*0.7), HEIGHT):
-        a = int(180 * (y - HEIGHT*0.7) / (HEIGHT*0.3))
-        vdraw.line([(0,y), (WIDTH,y)], fill=(0,0,0,a))
-    canvas.paste(vig, (0,0), vig)
+        alpha = int(180 * ((y - HEIGHT*0.7)/(HEIGHT*0.3)))
+        v_draw.line([(0,y), (WIDTH,y)], fill=(0,0,0,alpha))
+    canvas.paste(vignette, (0,0), vignette)
 
-    return np.array(canvas.convert("RGB"))
+    return np.array(canvas)
 
-# ================================
-# UI
-# ================================
-st.title("✨ AdGen EVO – SM Interiors Luxury Edition")
-st.markdown("#### Instant 6-second Instagram/TikTok ads with AI hook, animation & music")
+# --- MAIN UI ---
 
-col1, col2 = st.columns([1, 1])
+# Initialize session state for content display management
+if 'show_content' not in st.session_state:
+    st.session_state.show_content = False
 
-with col1:
-    st.header("Ad Generator")
-    u_file = st.file_uploader("Upload Product Photo", type=["png", "jpg", "jpeg"])
-    u_model = st.text_input("Product Name", "Imperial Velvet Sofa")
-    u_price = st.text_input("Price", "Ksh 129,900")
-    u_contact = st.text_input("Contact / CTA", "Call 0710 895 737")
-    u_style = st.selectbox("Visual Style", list(TEMPLATES.keys()))
+with st.sidebar:
+    st.header("⚡ Turbo Ad Generator")
+    u_file = st.file_uploader("1. Product Image", type=["jpg", "png"])
+    u_model = st.text_input("Product Name", "Walden Media Console")
+    u_price = st.text_input("Price", "Ksh 49,900")
+    u_contact = st.text_input("Contact Info", "0710895737")
+    
+    u_style = st.selectbox("Design Template", list(TEMPLATES.keys()), index=0) 
     u_music = st.selectbox("Background Music", list(MUSIC_TRACKS.keys()))
-    show_new = st.checkbox("Show 'NEW' Badge", value=True)
-    btn_ad = st.button("Generate Luxury Ad →", type="primary", use_container_width=True)
+    btn_ad = st.button("🚀 Generate Ad Video", type="primary")
 
-with col2:
-    st.header("Content Ideas")
-    u_type = st.radio("Tip Type", ["DIY Tips", "Furniture Tips", "Interior Design Tips", "Maintenance Tips"])
-    u_kw = st.text_input("Keyword", "Velvet Sofa")
-    btn_tips = st.button("Generate Tips", use_container_width=True)
+    # TEST BUTTON 
+    btn_test = st.button("🔑 Verify Groq Key") 
 
-# Tips Generator
-if btn_tips:
-    tips = generate_tips(u_type, u_kw)
-    st.markdown(f"### {u_type} for **{u_kw}**")
-    st.markdown(tips)
+    st.markdown("---")
+    
+    # === CONTENT GENERATOR SECTION ===
+    st.header("💡 Content Idea Generator")
+    u_content_type = st.radio(
+        "Select Content Type:",
+        ["DIY Tips", "Furniture Tips", "Interior Design Tips", "Maintenance Tips"] 
+    )
+    u_content_keyword = st.text_input("Content Focus (e.g., 'Small living room')", value="Mid-Century Console")
+    btn_content = st.button("🧠 Generate Tips")
+    
+st.title("AdGen EVO: Dynamic Brand Ads & Content")
 
-# Video Ad Generator
+# --- EXECUTION LOGIC ---
+
+# 1. CONTENT GENERATION LOGIC
+if btn_content:
+    st.session_state.show_content = True
+    st.session_state.content_type = u_content_type
+    st.session_state.content_keyword = u_content_keyword
+
+if st.session_state.show_content and btn_content:
+    st.subheader(f"✨ Top 5 {st.session_state.content_type} on: *{st.session_state.content_keyword}*")
+    
+    generated_text = generate_tips(st.session_state.content_type, st.session_state.content_keyword)
+    
+    if generated_text:
+        st.markdown(generated_text)
+        st.success("Use these points as script ideas for your next TikTok/Reel!")
+    else:
+        st.error("Could not retrieve tips. Check your Groq key or try again.")
+    
+    st.markdown("---")
+    st.session_state.show_content = False 
+
+# 2. VIDEO AD GENERATION LOGIC
 if btn_ad and u_file:
-    status = st.status("Creating your luxury ad...", expanded=True)
-
-    # 1. Process image
-    status.update(label="Enhancing product & removing background...")
-    raw = Image.open(u_file).convert("RGBA")
-    product_img = process_image_pro(raw)
-    st.image(product_img, "Processed Product", width=180)
-
-    # 2. AI hook + layout (cached)
-    status.update(label="AI writing hook & layout...")
-    buf = io.BytesIO()
-    product_img.save(buf, format="PNG")
-    hook, layout = get_hook_and_layout(buf.getvalue(), u_model)
-    st.success(f"AI Hook: **{hook}**")
-
-    # 3. Load logo
-    status.update(label="Loading brand assets...")
-    logo_img = get_cached_logo(LOGO_URL)
-
-    # 4. Render frames with progress
-    status.update(label="Rendering 180 animated frames...")
-    progress_bar = st.progress(0)
-    texts = {"caption": hook, "price": u_price, "contact": u_contact}
+    st.session_state.show_content = False
+    status = st.status("Initializing AI & Design Engine...", expanded=True)
+    
+    # 1. Background Removal & Enhancement
+    status.write("🚿 Cleaning & Enhancing Product Image...")
+    raw_img = Image.open(u_file).convert("RGBA")
+    pro_img = process_image_pro(raw_img)
+    st.image(pro_img, caption="AI Processed Product", width=200)
+    
+    # 2. Groq AI for Hook & Layout
+    status.write("🚀 Groq AI: Crafting Ad Copy & Layout...")
+    
+    start_time = time.time()
+    caption, layout = get_data_groq(pro_img, u_model)
+    end_time = time.time()
+    
+    status.write(f"✅ Groq AI Response Time: {round(end_time-start_time, 2)}s")
+    status.write(f"Hook: '{caption}'")
+    
+    # 3. Render Video Frames
+    status.write("🎨 Animating Design Elements & Product...")
+    texts = {"caption": caption, "price": u_price, "contact": u_contact}
     frames = []
-    total_frames = FPS * DURATION
-    for i in range(total_frames):
-        t = i / FPS
-        frame = create_frame(t, product_img, layout, texts, u_style, logo_img)
-        frames.append(frame)
-        progress_bar.progress((i + 1) / total_frames)
-    progress_bar.empty()
-
+    bar = status.progress(0)
+    
+    for i in range(FPS*DURATION):
+        frames.append(create_frame(i/FPS, pro_img, layout, texts, u_style))
+        bar.progress((i+1)/(FPS*DURATION))
+        
+    # 4. Audio Mixing
+    status.write("🎵 Mixing Audio Track...")
     clip = ImageSequenceClip(frames, fps=FPS)
-
-    # 5. Add music
-    status.update(label="Adding music & exporting...")
     try:
-        audio_bytes = requests.get(MUSIC_TRACKS[u_music], timeout=15).content
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-            tmp.write(audio_bytes)
-            audio = AudioFileClip(tmp.name).subclip(0, DURATION).audio_fadeout(0.7)
-            final = clip.set_audio(audio)
-            os.unlink(tmp.name)
-    except:
-        final = clip
-        st.warning("Music failed – video will be silent")
+        r_aud = requests.get(MUSIC_TRACKS[u_music])
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tf:
+            tf.write(r_aud.content)
+            tf_name = tf.name
+        aclip = AudioFileClip(tf_name).subclip(0, DURATION).audio_fadeout(1)
+        fclip = clip.set_audio(aclip)
+        os.unlink(tf_name)
+    except Exception as e: 
+        st.warning(f"Audio failed, rendering silent video. Error: {e}")
+        fclip = clip
 
-    # 6. Export
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        final.write_videofile(tmp.name, codec="libx264", audio_codec="aac", fps=FPS, verbose=False, logger=None)
-        st.video(tmp.name)
-        with open(tmp.name, "rb") as f:
-            st.download_button(
-                "Download Your Luxury Ad",
-                f,
-                f"SM_{u_model.replace(' ', '_')}_Ad.mp4",
-                "video/mp4",
-                use_container_width=True
-            )
-        os.unlink(tmp.name)
+    # 5. Finalize Video
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as vf:
+        fclip.write_videofile(vf.name, codec="libx264", audio_codec="aac", logger=None)
+        final_path = vf.name
+    
+    status.update(label="✨ Ad Video Ready!", state="complete", expanded=False)
+    st.video(final_path)
+    with open(final_path, "rb") as f:
+        st.download_button("Download Ad", f, "ad_dynamic_brand.mp4")
+        os.unlink(final_path)
 
-    status.update(label="Your luxury ad is ready!", state="complete")
 elif btn_ad:
-    st.error("Please upload a product image first!")
+    st.error("Please upload a product image to start!")
 
-st.caption("AdGen EVO 2025 • Built with Grok + Streamlit • Zero crashes, pure luxury")
+# 3. GROQ KEY TEST LOGIC 
+def test_groq_connection():
+    """Tests the Groq API key validity with a simple request."""
+    st.subheader("🔑 Groq Key Test Results")
+    
+    test_payload = {
+        "model": "llama-3.3-70b-versatile", 
+        "messages": [{"role": "user", "content": "Say hello in one word."}],
+        "max_tokens": 5
+    }
+    
+    try:
+        r = requests.post(GROQ_URL, json=test_payload, headers=HEADERS, timeout=5)
+        r.raise_for_status()
+        
+        response = r.json()["choices"][0]["message"]["content"].strip()
+        
+        if "hello" in response.lower():
+            st.success("✅ **Groq Key is Valid and Connection is Good!**")
+        else:
+            st.warning(f"⚠️ **Key is valid, but received unexpected response:** *{response}*")
+            
+    except requests.exceptions.HTTPError as e:
+        if r.status_code == 401:
+            st.error("❌ **Authentication Failed (401).** Your Groq Key is likely **incorrect or expired.**")
+        elif r.status_code == 429:
+            st.error("❌ **Rate Limit Exceeded (429).** Try again later or check your quota.")
+        else:
+            st.error(f"❌ **HTTP Error {r.status_code}.** Check Groq usage or try again. Details: {e}")
+    except Exception as e:
+        st.error(f"❌ **Connection Failed.** Check network connection. Error: {e}")
+
+if btn_test:
+    st.session_state.show_content = False 
+    test_groq_connection()
