@@ -12,6 +12,7 @@ st.set_page_config(page_title="AdGen EVO: Content & Ads", layout="wide", page_ic
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
 DURATION = 6
+# Logo URL should be stable and publicly accessible
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037" 
 
 # --- ASSETS ---
@@ -22,6 +23,7 @@ MUSIC_TRACKS = {
 }
 
 # --- AUTH ---
+# Make sure your Groq API key is in .streamlit/secrets.toml as groq_key = "gsk_......"
 if "groq_key" not in st.secrets:
     st.error("🚨 Missing Secret: Add `groq_key` to your .streamlit/secrets.toml")
     st.stop()
@@ -38,9 +40,11 @@ def process_image_pro(input_image):
     """Removes Background via Rembg and applies sharpness/contrast enhancements."""
     with st.spinner("🚿 Removing background & enhancing..."):
         img_byte_arr = io.BytesIO()
-        input_image.save(img_byte_arr, format='PNG')
+        # Ensure we start with RGBA if we want transparency removal
+        input_image.save(img_byte_arr, format='PNG') 
         input_image_bytes = img_byte_arr.getvalue()
         
+        # Output is RGBA
         output_bytes = remove(input_image_bytes)
         clean_img = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
 
@@ -85,7 +89,7 @@ BRAND_TEXT_LIGHT = "#FFFFFF" # White
 BRAND_TEXT_DARK = "#000000"  # Black
 
 TEMPLATES = {
-    "SM Interiors Basic": { # Your original clean template
+    "SM Interiors Basic": { 
         "bg_grad": [BRAND_PRIMARY, "#2a201b"], 
         "accent": BRAND_ACCENT, "text": BRAND_TEXT_LIGHT, 
         "price_bg": BRAND_ACCENT, "price_text": BRAND_TEXT_DARK,
@@ -122,7 +126,6 @@ def ask_groq(payload):
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        # Improved error reporting for API issues
         if hasattr(e, 'response') and e.response is not None:
              print(f"Groq HTTP Error: {e.response.status_code} {e.response.reason} for URL: {e.response.url}")
         else:
@@ -132,9 +135,20 @@ def ask_groq(payload):
 def get_data_groq(img, model_name):
     """Gets caption (Vision) and layout (Logic) from Groq."""
     
-    # 1. Base64 Encoding for Vision (Using JPEG for robustness)
+    # 1. Base64 Encoding for Vision (Convert RGBA to RGB for JPEG compatibility)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90) 
+    
+    # FIX: Convert RGBA (transparent) to RGB (solid) before saving as JPEG 
+    if img.mode == 'RGBA':
+        # Create a white background image (RGB)
+        rgb_img = Image.new("RGB", img.size, (255, 255, 255))
+        # Paste the RGBA image onto the white background using the alpha mask
+        rgb_img.paste(img, (0, 0), img)
+    else:
+        rgb_img = img.convert("RGB")
+        
+    # Save the processed RGB image as JPEG to the buffer
+    rgb_img.save(buf, format="JPEG", quality=90) 
     b64 = base64.b64encode(buf.getvalue()).decode()
     
     # 2. Vision Task (Llama 3.2 Vision Preview) for caption
@@ -142,7 +156,8 @@ def get_data_groq(img, model_name):
         "model": "llama-3.2-11b-vision-preview",
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": f"Write a 4-word catchy luxury ad hook for this furniture model '{model_name}'."},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            # NOTE: Using data:image/jpeg header here
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}} 
         ]}],
         "temperature": 0.7,
         "max_tokens": 30
@@ -184,7 +199,7 @@ def get_data_groq(img, model_name):
         return caption, default_layout
 
 # =========================================================================
-# === UPDATED CONTENT GENERATION LOGIC (Added Maintenance Tips) ===
+# === CONTENT GENERATION LOGIC (Includes Maintenance Tips) ===
 
 def generate_tips(content_type, keyword="interior design"):
     """Generates a list of content ideas (tips) using Groq."""
@@ -199,7 +214,6 @@ def generate_tips(content_type, keyword="interior design"):
         user_prompt = f"Generate 5 high-value tips on how to properly care for, arrange, or choose high-end furniture (like the '{keyword}' product). Focus on luxury, longevity, and placement."
     elif content_type == "Interior Design Tips":
         user_prompt = f"Generate 5 creative and trending interior design tips or small-space hacks related to the theme of '{keyword}'. Focus on quick visual improvements and style."
-    # --- NEW: Maintenance Tips ---
     elif content_type == "Maintenance Tips":
         user_prompt = f"Generate 5 essential tips on cleaning, polishing, and long-term maintenance for luxury furniture materials like solid wood, brass, and fine upholstery, focused on the product '{keyword}'. The tips must be specific and actionable for a short video."
     else:
@@ -218,12 +232,9 @@ def generate_tips(content_type, keyword="interior design"):
     with st.spinner(f"🧠 Groq is generating {content_type} ideas..."):
         return ask_groq(payload)
 
-# === END UPDATED CONTENT GENERATION LOGIC ===
-# =========================================================================
-
-
 # --- RENDERING UTILITIES ---
 def draw_wrapped_text(draw, text, box, font, color, align="center"):
+    """Handles multi-line text wrapping within a bounding box."""
     lines = []
     words = text.split()
     line = ""
@@ -295,6 +306,7 @@ def create_frame(t, img, boxes, texts, tpl_name):
         circle_size_small = int(WIDTH * 0.7 * ease_out_elastic(max(0, t - 1.0)))
         cx_s, cy_s = int(WIDTH * 0.2), int(HEIGHT * 0.3)
         
+        # FIX IS HERE (graphic_color_rgb used correctly)
         draw.ellipse([cx_s - circle_size_small//2, cy_s - circle_size_small//2, 
                       cx_s + circle_size_small//2, cy_s + circle_size_small//2], 
                      fill=(graphic_color_rgb[0], graphic_color_rgb[1], graphic_color_rgb[2], int(circle_alpha * 0.4)))
@@ -396,11 +408,11 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # === UPDATED: CONTENT GENERATOR SECTION (Added Maintenance Tips) ===
+    # === CONTENT GENERATOR SECTION ===
     st.header("💡 Content Idea Generator")
     u_content_type = st.radio(
         "Select Content Type:",
-        ["DIY Tips", "Furniture Tips", "Interior Design Tips", "Maintenance Tips"] # NEW OPTION ADDED
+        ["DIY Tips", "Furniture Tips", "Interior Design Tips", "Maintenance Tips"] 
     )
     u_content_keyword = st.text_input("Content Focus (e.g., 'Small living room')", value="Mid-Century Console")
     btn_content = st.button("🧠 Generate Tips")
@@ -426,9 +438,11 @@ if st.session_state.show_content and btn_content:
         st.markdown(generated_text)
         st.success("Use these points as script ideas for your next TikTok/Reel!")
     else:
+        # Error message is printed to the console within ask_groq/generate_tips
         st.error("Could not retrieve tips. Check your Groq key or try again.")
     
     st.markdown("---")
+    # Reset flag so the content section is prioritized only after button click
     st.session_state.show_content = False 
 
 # 2. VIDEO AD GENERATION LOGIC
@@ -447,7 +461,7 @@ if btn_ad and u_file:
     status.write("🚀 Groq AI: Crafting Ad Copy & Layout...")
     
     start_time = time.time()
-    # Note: Using the corrected call with the PIL Image object (pro_img)
+    # Call corrected get_data_groq passing the PIL Image object
     caption, layout = get_data_groq(pro_img, u_model)
     end_time = time.time()
     
@@ -474,14 +488,19 @@ if btn_ad and u_file:
             tf_name = tf.name
         aclip = AudioFileClip(tf_name).subclip(0, DURATION).audio_fadeout(1)
         fclip = clip.set_audio(aclip)
+        # Clean up temp audio file
+        os.unlink(tf_name)
     except Exception as e: 
-        st.warning(f"Audio failed, rendering silent video.")
+        st.warning(f"Audio failed, rendering silent video. Error: {e}")
         fclip = clip
 
     # 5. Finalize Video
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as vf:
         fclip.write_videofile(vf.name, codec="libx264", audio_codec="aac", logger=None)
         final_path = vf.name
+    
+    # Clean up temp video file
+    os.unlink(final_path)
 
     status.update(label="✨ Ad Video Ready!", state="complete", expanded=False)
     st.video(final_path)
