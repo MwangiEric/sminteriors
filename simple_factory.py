@@ -72,17 +72,14 @@ def process_image_pro(input_image):
 # FONTS
 # ================================
 def get_font(size):
-    for path in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "arial.ttf",
-        "DejaVuSans-Bold.ttf"
-    ]:
+    # Note: Assuming ImageFont.truetype is available with standard fonts for simplicity
+    try:
+        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+    except:
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype("arial.ttf", size)
         except:
-            continue
-    return ImageFont.load_default()
+            return ImageFont.load_default()
 
 # ================================
 # ANIMATION HELPERS
@@ -175,7 +172,7 @@ def get_data_groq(img, model_name):
         data = json.loads(layout_raw)
         potential_layout = data.get("layout", data) if isinstance(data, dict) else data
 
-        # *** CRITICAL FIX FOR KeyError: 'w' ***
+        # CRITICAL VALIDATION FIX for KeyError: 'w'
         required_keys = ['x', 'y', 'w', 'h', 'role']
         is_valid_layout = (
             isinstance(potential_layout, list) and 
@@ -219,7 +216,7 @@ def generate_tips(content_type, keyword):
         return result or "No response from Groq. Try again."
 
 # ================================
-# FRAME RENDERER (UPDATED LOGO ARGUMENT)
+# FRAME RENDERER (FIXED TYPE ERROR)
 # ================================
 def draw_wrapped_text(draw, text, box, font, color):
     lines = []
@@ -239,7 +236,7 @@ def draw_wrapped_text(draw, text, box, font, color):
         draw.text((box['x'] + (box['w']-w)//2, y), line, font=font, fill=color)
         y += draw.textbbox((0,0), line, font=font)[3] + 8
 
-def create_frame(t, img, boxes, texts, tpl_name, logo_img): # ADDED logo_img
+def create_frame(t, img, boxes, texts, tpl_name, logo_img):
     T = TEMPLATES[tpl_name]
     canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
@@ -278,7 +275,6 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img): # ADDED logo_img
         if b["role"] == "product":
             scale = ease_out_elastic(min(t * 1.3, 1.0))
             if scale > 0.02:
-                # This line is now safe due to CRITICAL FIX in get_data_groq
                 pw, ph = int(b["w"]*scale), int(b["h"]*scale)
                 prod = img.resize((pw, ph), Image.LANCZOS)
                 
@@ -288,8 +284,18 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img): # ADDED logo_img
                 shadow = shadow.point(lambda p: p * 0.3)
                 shadow = shadow.convert("RGBA")
                 shadow = shadow.filter(ImageFilter.GaussianBlur(20))
-                canvas.paste(shadow, (b["x"]+(b["w"]-pw)//2+10, b["y"]+(b["h"]-ph)//2+40), shadow)
-                canvas.paste(prod, (b["x"]+(b["w"]-pw)//2, b["y"]+(b["h"]-ph)//2 + math.sin(t*3)*10), prod)
+                
+                # FIX 1: Explicitly cast coordinates to int() for shadow placement
+                canvas.paste(shadow, 
+                             (int(b["x"]+(b["w"]-pw)//2+10), int(b["y"]+(b["h"]-ph)//2+40)), 
+                             shadow)
+
+                # FIX 2: Explicitly use alpha channel as mask AND cast coordinates to int()
+                prod_mask = prod.getchannel('A')
+                canvas.paste(prod, 
+                             (int(b["x"]+(b["w"]-pw)//2), 
+                              int(b["y"]+(b["h"]-ph)//2 + math.sin(t*3)*10)), 
+                             prod_mask)
 
         elif b["role"] == "price":
             if t > 1.4:
@@ -305,7 +311,7 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img): # ADDED logo_img
                 draw_wrapped_text(draw, texts["contact"], b, get_font(32), T["text"])
 
         elif b["role"] == "logo":
-            # REPLACED NETWORK REQUEST with cached image object
+            # Uses cached logo
             if logo_img:
                 logo_resized = logo_img.resize((b["w"], b["h"]), Image.LANCZOS)
                 canvas.paste(logo_resized, (b["x"], b["y"]), logo_resized)
@@ -364,7 +370,7 @@ if btn_ad and u_file:
     hook, layout = get_data_groq(product_img, u_model)
     st.write(f"**AI Hook:** {hook}")
     
-    # 2.5 Load Logo (NEW STEP)
+    # 2.5 Load Logo (Cached Step)
     status.update(label="Loading brand logo...")
     logo_img = get_cached_logo(LOGO_URL, WIDTH, HEIGHT)
 
