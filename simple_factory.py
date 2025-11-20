@@ -1,6 +1,6 @@
 import streamlit as st
 import io, requests, math, tempfile, base64, json, random, time, os
-from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance, ImageOps
 import numpy as np
 from moviepy.editor import ImageSequenceClip, AudioFileClip
 from rembg import remove, new_session
@@ -15,12 +15,12 @@ FPS = 30
 DURATION = 6
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
 
-# Hotlink-friendly royalty-free music
+# Fixed hotlink-friendly royalty-free music (direct MP3 URLs)
 MUSIC_TRACKS = {
     "Upbeat Pop": "https://cdn.pixabay.com/download/audio/2024/08/15/audio_5a54d0f2f6.mp3?filename=upbeat-background-171614.mp3",
-    "Luxury Chill": "https://uppbeat.io/track/prigida/moving-on/mp3",
-    "Modern Gold": "https://uppbeat.io/track/synapse-fire/link-me-up/mp3",
-    "Chill Beats": "https://uppbeat.io/track/ikson-new/world/mp3"
+    "Luxury Chill": "https://uppbeat.io/assets/track/mp3/prigida-moving-on.mp3",
+    "Modern Gold": "https://uppbeat.io/assets/track/mp3/synapse-fire-link-me-up.mp3",
+    "Chill Beats": "https://uppbeat.io/assets/track/mp3/ikson-new-world.mp3"
 }
 
 # ================================
@@ -34,7 +34,7 @@ HEADERS = {
     "Authorization": f"Bearer {st.secrets['groq_key']}",
     "Content-Type": "application/json"
 }
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"  # Base URL only
 
 # ================================
 # CACHED REMBG SESSION (much faster)
@@ -101,15 +101,24 @@ TEMPLATES = {
 }
 
 # ================================
-# GROQ HELPERS
+# GROQ HELPERS (FIXED URL & MODELS)
 # ================================
 def ask_groq(payload):
     try:
-        r = requests.post(GROQ_URL, json=payload, headers=HEADERS, timeout=12)
+        full_url = f"{GROQ_BASE_URL}/chat/completions"  # Correct endpoint
+        r = requests.post(full_url, json=payload, headers=HEADERS, timeout=12)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            st.error("404: Invalid model or endpoint. Check model names (e.g., llama-3.3-70b-versatile).")
+        elif e.response.status_code == 401:
+            st.error("401: Invalid API key. Regenerate at console.groq.com.")
+        else:
+            st.error(f"HTTP {e.response.status_code}: {e.response.reason}")
+        return None
     except Exception as e:
-        st.error(f"Groq error: {e}")
+        st.error(f"Connection error: {e}")
         return None
 
 def get_data_groq(img, model_name):
@@ -119,7 +128,7 @@ def get_data_groq(img, model_name):
     rgb.save(buf, format="JPEG", quality=90)
     b64 = base64.b64encode(buf.getvalue()).decode()
 
-    # Hook
+    # Hook (vision model)
     hook_payload = {
         "model": "llama-3.2-11b-vision-preview",
         "messages": [{"role": "user", "content": [
@@ -130,9 +139,9 @@ def get_data_groq(img, model_name):
     }
     hook = ask_groq(hook_payload) or "Elevate Your Living Space"
 
-    # Layout (70B model that actually exists in 2025)
+    # Layout (fixed 70B model)
     layout_payload = {
-        "model": "llama-3.3-70b-instruct",
+        "model": "llama-3.3-70b-versatile",  # Correct 2025 model
         "messages": [
             {"role": "system", "content": "Output ONLY valid JSON array of layout objects."},
             {"role": "user", "content": f"720×1280 ad. Roles: logo, product, caption, price, contact. Center the product. Product: {model_name}"}
@@ -169,7 +178,7 @@ def generate_tips(content_type, keyword):
         "Maintenance Tips": f"5 expert cleaning & care tips for solid wood, brass, fine upholstery"
     }
     payload = {
-        "model": "llama-3.3-70b-instruct",      # THIS WORKS IN 2025
+        "model": "llama-3.3-70b-versatile",  # Fixed 2025 model
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompts.get(content_type, "Generate 5 tips")}
@@ -182,7 +191,7 @@ def generate_tips(content_type, keyword):
         return result or "No response from Groq. Try again."
 
 # ================================
-# FRAME RENDERER
+# FRAME RENDERER (FIXED SHADOW & HEX)
 # ================================
 def draw_wrapped_text(draw, text, box, font, color):
     lines = []
@@ -207,16 +216,20 @@ def create_frame(t, img, boxes, texts, tpl_name):
     canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
 
-    # Gradient BG
-    c1 = tuple(int(T["bg_grad"][0].lstrip('#')[i:i+2], 16) for i in (0,2,4))
-    c2 = tuple(int(T["bg_grad"][1].lstrip('#')[i:i+2], 16) for i in (0,2,4))
+    # Fixed gradient hex parsing
+    def hex_to_rgb(hex_str):
+        hex_str = hex_str.lstrip('#')
+        return tuple(int(hex_str[i:i+2], 16) for i in (0,2,4))
+
+    c1 = hex_to_rgb(T["bg_grad"][0])
+    c2 = hex_to_rgb(T["bg_grad"][1])
     for y in range(HEIGHT):
         ratio = y / HEIGHT
         color = tuple(int(c1[i] + (c2[i] - c1[i]) * ratio) for i in range(3))
         draw.line([(0,y), (WIDTH,y)], fill=color)
 
     # Template graphics
-    gc = tuple(int(T.get("graphic_color", "#000000").lstrip('#')[i:i+2], 16) for i in (0,2,4)) if "graphic_color" in T else None
+    gc = hex_to_rgb(T.get("graphic_color", "#000000")) if "graphic_color" in T else None
 
     if T["graphic_type"] == "diagonal" and gc:
         alpha = int(255 * linear_fade(t, 0.5, 1.0))
@@ -239,6 +252,7 @@ def create_frame(t, img, boxes, texts, tpl_name):
             if scale > 0.02:
                 pw, ph = int(b["w"]*scale), int(b["h"]*scale)
                 prod = img.resize((pw, ph), Image.LANCZOS)
+                # Fixed shadow (using ImageOps)
                 shadow = prod.copy().convert("L")
                 shadow = ImageOps.invert(shadow)
                 shadow = shadow.point(lambda p: p * 0.3)
@@ -337,9 +351,9 @@ if btn_ad and u_file:
             audio = AudioFileClip(tmp.name).subclip(0, DURATION).audio_fadeout(0.8)
             final = clip.set_audio(audio)
             os.unlink(tmp.name)
-    except:
+    except Exception as e:
         final = clip
-        st.warning("Music failed – silent video generated")
+        st.warning(f"Music failed – silent video. Error: {e}")
 
     # 5. Export
     status.update(label="Exporting MP4...")
