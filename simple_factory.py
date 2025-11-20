@@ -1,6 +1,6 @@
 import streamlit as st
 import io, requests, math, tempfile, base64, json, random, time, os
-from PIL import Image, ImageDraw, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
 import numpy as np
 from moviepy.editor import ImageSequenceClip, AudioFileClip
 from rembg import remove, new_session
@@ -34,14 +34,25 @@ HEADERS = {
     "Authorization": f"Bearer {st.secrets['groq_key']}",
     "Content-Type": "application/json"
 }
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"  # Base URL only
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 # ================================
-# CACHED REMBG SESSION (much faster)
+# CACHED RESOURCES
 # ================================
 @st.cache_resource
 def get_rembg_session():
     return new_session()
+
+@st.cache_resource
+def get_cached_logo(logo_url, width, height):
+    """Downloads and caches the logo image once per session."""
+    try:
+        r = requests.get(logo_url, timeout=8)
+        r.raise_for_status()
+        return Image.open(io.BytesIO(r.content)).convert("RGBA")
+    except Exception as e:
+        st.warning(f"Failed to load logo from URL. Using transparent placeholder. Error: {e}")
+        return Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
 # ================================
 # IMAGE PROCESSING
@@ -105,13 +116,13 @@ TEMPLATES = {
 # ================================
 def ask_groq(payload):
     try:
-        full_url = f"{GROQ_BASE_URL}/chat/completions"  # Correct endpoint
+        full_url = f"{GROQ_BASE_URL}/chat/completions"
         r = requests.post(full_url, json=payload, headers=HEADERS, timeout=12)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            st.error("404: Invalid model or endpoint. Check model names (e.g., llama-3.3-70b-versatile).")
+            st.error("404: Invalid Groq model or endpoint. Check model names (e.g., llama-3.3-70b-versatile).")
         elif e.response.status_code == 401:
             st.error("401: Invalid API key. Regenerate at console.groq.com.")
         else:
@@ -141,9 +152,9 @@ def get_data_groq(img, model_name):
 
     # Layout (fixed 70B model)
     layout_payload = {
-        "model": "llama-3.3-70b-versatile",  # Correct 2025 model
+        "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "Output ONLY valid JSON array of layout objects."},
+            {"role": "system", "content": "Output ONLY a valid JSON array of layout objects. Each object MUST include 'role', 'x', 'y', 'w', and 'h' keys."},
             {"role": "user", "content": f"720×1280 ad. Roles: logo, product, caption, price, contact. Center the product. Product: {model_name}"}
         ],
         "response_format": {"type": "json_object"},
@@ -158,13 +169,30 @@ def get_data_groq(img, model_name):
         {"role": "price", "x": 160, "y": 1050, "w": 400, "h": 120},
         {"role": "contact", "x": 60, "y": 1200, "w": 600, "h": 60}
     ]
+    final_hook = hook.strip('"')
 
     try:
         data = json.loads(layout_raw)
-        layout = data if isinstance(data, list) else data.get("layout", default)
-        return hook.strip('"'), layout
+        potential_layout = data.get("layout", data) if isinstance(data, dict) else data
+
+        # *** CRITICAL FIX FOR KeyError: 'w' ***
+        required_keys = ['x', 'y', 'w', 'h', 'role']
+        is_valid_layout = (
+            isinstance(potential_layout, list) and 
+            all(
+                isinstance(item, dict) and 
+                all(key in item for key in required_keys)
+                for item in potential_layout
+            )
+        )
+        
+        if is_valid_layout:
+            return final_hook, potential_layout
+        else:
+            return final_hook, default
+            
     except:
-        return hook.strip('"'), default
+        return final_hook, default
 
 # ================================
 # CONTENT IDEA GENERATOR (FIXED MODEL)
@@ -178,7 +206,7 @@ def generate_tips(content_type, keyword):
         "Maintenance Tips": f"5 expert cleaning & care tips for solid wood, brass, fine upholstery"
     }
     payload = {
-        "model": "llama-3.3-70b-versatile",  # Fixed 2025 model
+        "model": "llama-3.3-70b-versatile",
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompts.get(content_type, "Generate 5 tips")}
@@ -191,7 +219,7 @@ def generate_tips(content_type, keyword):
         return result or "No response from Groq. Try again."
 
 # ================================
-# FRAME RENDERER (FIXED SHADOW & HEX)
+# FRAME RENDERER (UPDATED LOGO ARGUMENT)
 # ================================
 def draw_wrapped_text(draw, text, box, font, color):
     lines = []
@@ -211,7 +239,7 @@ def draw_wrapped_text(draw, text, box, font, color):
         draw.text((box['x'] + (box['w']-w)//2, y), line, font=font, fill=color)
         y += draw.textbbox((0,0), line, font=font)[3] + 8
 
-def create_frame(t, img, boxes, texts, tpl_name):
+def create_frame(t, img, boxes, texts, tpl_name, logo_img): # ADDED logo_img
     T = TEMPLATES[tpl_name]
     canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
@@ -250,8 +278,10 @@ def create_frame(t, img, boxes, texts, tpl_name):
         if b["role"] == "product":
             scale = ease_out_elastic(min(t * 1.3, 1.0))
             if scale > 0.02:
+                # This line is now safe due to CRITICAL FIX in get_data_groq
                 pw, ph = int(b["w"]*scale), int(b["h"]*scale)
                 prod = img.resize((pw, ph), Image.LANCZOS)
+                
                 # Fixed shadow (using ImageOps)
                 shadow = prod.copy().convert("L")
                 shadow = ImageOps.invert(shadow)
@@ -275,13 +305,11 @@ def create_frame(t, img, boxes, texts, tpl_name):
                 draw_wrapped_text(draw, texts["contact"], b, get_font(32), T["text"])
 
         elif b["role"] == "logo":
-            try:
-                r = requests.get(LOGO_URL, timeout=8)
-                r.raise_for_status()
-                logo = Image.open(io.BytesIO(r.content)).convert("RGBA").resize((b["w"], b["h"]), Image.LANCZOS)
-                canvas.paste(logo, (b["x"], b["y"]), logo)
-            except:
-                pass
+            # REPLACED NETWORK REQUEST with cached image object
+            if logo_img:
+                logo_resized = logo_img.resize((b["w"], b["h"]), Image.LANCZOS)
+                canvas.paste(logo_resized, (b["x"], b["y"]), logo_resized)
+            
 
     # Vignette
     vig = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
@@ -335,11 +363,15 @@ if btn_ad and u_file:
     status.update(label="AI generating hook & layout...")
     hook, layout = get_data_groq(product_img, u_model)
     st.write(f"**AI Hook:** {hook}")
+    
+    # 2.5 Load Logo (NEW STEP)
+    status.update(label="Loading brand logo...")
+    logo_img = get_cached_logo(LOGO_URL, WIDTH, HEIGHT)
 
-    # 3. Render frames
+    # 3. Render frames (UPDATED to pass logo_img)
     status.update(label="Animating frames...")
     texts = {"caption": hook, "price": u_price, "contact": u_contact}
-    frames = [create_frame(i/FPS, product_img, layout, texts, u_style) for i in range(FPS*DURATION)]
+    frames = [create_frame(i/FPS, product_img, layout, texts, u_style, logo_img) for i in range(FPS*DURATION)]
     clip = ImageSequenceClip(frames, fps=FPS)
 
     # 4. Add music
