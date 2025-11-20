@@ -192,8 +192,11 @@ def get_data_groq(img, model_name):
 # =========================================================================
 # === UPDATED CONTENT GENERATION LOGIC (Now using Mistral) ===
 
+# =========================================================================
+# === UPDATED CONTENT GENERATION LOGIC (Switched to Llama 3 70B for text) ===
+
 def generate_tips(content_type, keyword="interior design"):
-    """Generates a list of content ideas (tips) using Mistral 8x7b."""
+    """Generates a list of content ideas (tips) using Llama 3 70B."""
     
     system_prompt = f"""You are a content creation expert for a luxury home furnishing brand named 'SM Interiors'. 
     Your tone must be authoritative, engaging, and suitable for short-form video content (TikTok/Reels).
@@ -211,7 +214,7 @@ def generate_tips(content_type, keyword="interior design"):
         return "*Select a content type to generate ideas.*"
 
     payload = {
-        "model": "mixtral-8x7b-instruct",  # <-- MISTRAL MODEL USED HERE
+        "model": "llama3-70b-8192",  # <-- FIXED: Using Llama 3 70B for reliable text generation
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -220,7 +223,8 @@ def generate_tips(content_type, keyword="interior design"):
         "max_tokens": 1024
     }
     
-    with st.spinner(f"🧠 Mistral is generating {content_type} ideas..."):
+    with st.spinner(f"🧠 Groq AI is generating {content_type} ideas..."):
+        # The underlying ask_groq function handles the API call
         return ask_groq(payload)
 
 # === END UPDATED CONTENT GENERATION LOGIC ===
