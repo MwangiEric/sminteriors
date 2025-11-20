@@ -1,6 +1,6 @@
 import streamlit as st
 import io, requests, math, tempfile, base64, json, random, time, os
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance, ImageOps
 import numpy as np
 from moviepy.editor import ImageSequenceClip, AudioFileClip
 from rembg import remove, new_session
@@ -37,7 +37,7 @@ HEADERS = {
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"  # Base URL only
 
 # ================================
-# CACHED REMBG SESSION
+# CACHED REMBG SESSION (much faster)
 # ================================
 @st.cache_resource
 def get_rembg_session():
@@ -111,7 +111,7 @@ def ask_groq(payload):
         return r.json()["choices"][0]["message"]["content"]
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            st.error("404: Invalid Groq model or endpoint. Check model names (e.g., llama-3.3-70b-versatile).")
+            st.error("404: Invalid model or endpoint. Check model names (e.g., llama-3.3-70b-versatile).")
         elif e.response.status_code == 401:
             st.error("401: Invalid API key. Regenerate at console.groq.com.")
         else:
@@ -121,9 +121,6 @@ def ask_groq(payload):
         st.error(f"Connection error: {e}")
         return None
 
-# ================================
-# AI HOOK & LAYOUT (WITH HARDENED JSON PARSING)
-# ================================
 def get_data_groq(img, model_name):
     # Encode image as JPEG for vision model
     buf = io.BytesIO()
@@ -135,7 +132,7 @@ def get_data_groq(img, model_name):
     hook_payload = {
         "model": "llama-3.2-11b-vision-preview",
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": f"Write a 4–6 word catchy, luxury ad hook for this {model_name}."},
+            {"type": "text", "text": f"Write a 4–6 word luxury ad hook for this {model_name}."},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
         ]}],
         "max_tokens": 30
@@ -144,10 +141,10 @@ def get_data_groq(img, model_name):
 
     # Layout (fixed 70B model)
     layout_payload = {
-        "model": "llama3-70b-8192",  # Using highly stable Llama 3 70B
+        "model": "llama-3.3-70b-versatile",  # Correct 2025 model
         "messages": [
-            {"role": "system", "content": "Output ONLY a valid JSON array of layout objects. Each object must have 'role', 'x', 'y', 'w', 'h'."},
-            {"role": "user", "content": f"720×1280 ad layout for: logo, product, caption, price, contact. Center the product. Product: {model_name}"}
+            {"role": "system", "content": "Output ONLY valid JSON array of layout objects."},
+            {"role": "user", "content": f"720×1280 ad. Roles: logo, product, caption, price, contact. Center the product. Product: {model_name}"}
         ],
         "response_format": {"type": "json_object"},
         "temperature": 0.3
@@ -161,29 +158,13 @@ def get_data_groq(img, model_name):
         {"role": "price", "x": 160, "y": 1050, "w": 400, "h": 120},
         {"role": "contact", "x": 60, "y": 1200, "w": 600, "h": 60}
     ]
-    final_hook = hook.strip('"')
 
     try:
         data = json.loads(layout_raw)
-        
-        # 1. Check for nested structure (e.g., {"layout": [...]})
-        potential_layout = data.get("layout", data) if isinstance(data, dict) else data
-
-        # 2. Final validation: must be a list of dictionaries with 'role'
-        is_valid_layout = (
-            isinstance(potential_layout, list) and 
-            all(isinstance(item, dict) and "role" in item for item in potential_layout)
-        )
-        
-        if is_valid_layout:
-            return final_hook, potential_layout
-        else:
-            # Fallback if JSON is returned but fails structural validation
-            return final_hook, default
-            
+        layout = data if isinstance(data, list) else data.get("layout", default)
+        return hook.strip('"'), layout
     except:
-        # Fallback if json.loads() fails entirely (e.g., malformed JSON)
-        return final_hook, default
+        return hook.strip('"'), default
 
 # ================================
 # CONTENT IDEA GENERATOR (FIXED MODEL)
@@ -197,7 +178,7 @@ def generate_tips(content_type, keyword):
         "Maintenance Tips": f"5 expert cleaning & care tips for solid wood, brass, fine upholstery"
     }
     payload = {
-        "model": "llama3-70b-8192",  # Using highly stable Llama 3 70B
+        "model": "llama-3.3-70b-versatile",  # Fixed 2025 model
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompts.get(content_type, "Generate 5 tips")}
@@ -207,10 +188,10 @@ def generate_tips(content_type, keyword):
     }
     with st.spinner("Generating tips..."):
         result = ask_groq(payload)
-        return result or "No response from Groq. Check your API key and connection."
+        return result or "No response from Groq. Try again."
 
 # ================================
-# FRAME RENDERER
+# FRAME RENDERER (FIXED SHADOW & HEX)
 # ================================
 def draw_wrapped_text(draw, text, box, font, color):
     lines = []
@@ -313,7 +294,7 @@ def create_frame(t, img, boxes, texts, tpl_name):
     return np.array(canvas)
 
 # ================================
-# UI & MAIN LOGIC
+# UI
 # ================================
 st.title("AdGen EVO – SM Interiors Edition")
 
@@ -364,7 +345,7 @@ if btn_ad and u_file:
     # 4. Add music
     status.update(label="Adding music...")
     try:
-        audio_data = requests.get(MUSIC_TRACKS[u_music], timeout=8).content
+        audio_data = requests.get(MUSIC_TRACKS[u_music]).content
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
             tmp.write(audio_data)
             audio = AudioFileClip(tmp.name).subclip(0, DURATION).audio_fadeout(0.8)
@@ -376,18 +357,15 @@ if btn_ad and u_file:
 
     # 5. Export
     status.update(label="Exporting MP4...")
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-            final.write_videofile(tmp.name, codec="libx264", audio_codec="aac", fps=FPS, logger=None, verbose=False)
-            st.video(tmp.name)
-            with open(tmp.name, "rb") as f:
-                st.download_button("Download Luxury Ad", f, f"SM_{u_model.replace(' ', '_')}.mp4", "video/mp4")
-            os.unlink(tmp.name)
-    except Exception as e:
-        st.error(f"Video finalization failed: {e}")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        final.write_videofile(tmp.name, codec="libx264", audio_codec="aac", fps=FPS, logger=None, verbose=False)
+        st.video(tmp.name)
+        with open(tmp.name, "rb") as f:
+            st.download_button("Download Luxury Ad", f, f"SM_{u_model.replace(' ', '_')}.mp4", "video/mp4")
+        os.unlink(tmp.name)
 
     status.update(label="Done! Your ad is ready", state="complete")
 elif btn_ad:
     st.error("Upload a product image first!")
 
-st.caption("AdGen EVO by Grok × Streamlit – Final Working Version")
+st.caption("AdGen EVO by Grok × Streamlit – 2025 Edition")
