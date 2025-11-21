@@ -1,192 +1,204 @@
 import streamlit as st
-import io, requests, math, tempfile, base64, json, time, os
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+import io, requests, math, tempfile, time, os
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import numpy as np
-from moviepy.editor import ImageSequenceClip, AudioFileClip, TextClip, CompositeVideoClip
+from moviepy.editor import ImageSequenceClip, AudioFileClip
 from rembg import remove
 
-# ────────────────────────────── CONFIG ──────────────────────────────
-st.set_page_config(page_title="DIY Tips → Creative Video", layout="wide", page_icon="✨")
+st.set_page_config(page_title="SM Interiors – Viral Tips Video Maker", layout="centered", page_icon="gold_circle")
 
+# ────────────────────────────── DESIGN CONSTANTS ──────────────────────────────
 WIDTH, HEIGHT = 720, 1280
 FPS = 30
-DURATION = 6
+DURATION = 7  # slightly longer for better typing feel
+
+BG_COLOR = "#1E0F0B"
+GOLD = "#D4AF37"
+WHITE = "#FFFFFF"
 
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
-
-MUSIC = {
-    "Luxury Chill": "https://archive.org/download/bensound-adaytoremember/bensound-adaytoremember.mp3",
-    "Modern Beats": "https://archive.org/download/bensound-sweet/bensound-sweet.mp3"
-}
-
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-HEADERS = {"Authorization": f"Bearer {st.secrets['groq_key']}", "Content-Type": "application/json"}
+MUSIC_URL = "https://archive.org/download/bensound-adaytoremember/bensound-adaytoremember.mp3"
 
 # ────────────────────────────── HELPERS ──────────────────────────────
-def ask_groq(payload):
-    try:
-        r = requests.post(GROQ_URL, json=payload, headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        st.error(f"Groq error: {e}")
-        return None
-
 def get_font(size):
-    for path in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "arial.ttf"]:
-        try: return ImageFont.truetype(path, size)
-        except: pass
-    return ImageFont.load_default()
+    try:
+        return ImageFont.truetype("arial.ttf", size)
+    except:
+        return ImageFont.load_default()
 
-# ────────────────────────────── TIP GENERATOR ──────────────────────────────
-st.title("DIY & Interior Tips → Creative Video Maker")
+def ease_out_quart(t): 
+    return 1 - (1 - t) ** 4
 
-tab1, tab2 = st.tabs(["Generate Tips", "Make Creative Video"])
+def draw_curved_shapes(draw):
+    # Big gold circles & curves like your design
+    draw.ellipse([50, 100, 400, 450], outline=GOLD, width=18)
+    draw.ellipse([WIDTH-450, 700, WIDTH-50, 1100], outline=GOLD, width=20)
+    draw.arc([200, -200, WIDTH+200, 600], start=0, end=90, fill=GOLD, width=25)
+    draw.arc([-100, 800, 500, 1400], start=270, end=360, fill=GOLD, width=22)
 
+# ────────────────────────────── MAIN APP ──────────────────────────────
+st.markdown("<h1 style='text-align:center; color:#D4AF37;'>SM Interiors – Viral Tips Video Maker</h1>", unsafe_allow_html=True)
+
+tab1, tab2 = st.tabs(["Generate 5 Tips", "Create Video from Tip"])
+
+# ============================= TAB 1: Generate Tips =============================
 with tab1:
-    st.header("Generate 5 Viral DIY / Interior Tips")
-    tip_type = st.selectbox("Tip Category", [
-        "DIY Home Decor Hacks", "Furniture Restoration", 
-        "Small Space Solutions", "Luxury on a Budget", "Quick Staging Tricks"
-    ])
-    focus = st.text_input("Focus keyword (optional)", "velvet sofa, mid-century, brass accents")
+    st.markdown("### Generate 5 Viral DIY / Interior Tips")
+    focus = st.text_input("Focus keyword (e.g., 'media console', 'velvet sofa')", "Horizon Media Console")
 
-    if st.button("Generate Tips", type="primary"):
-        with st.spinner("Groq is writing fire tips..."):
+    if st.button("Generate 5 Tips", type="primary"):
+        with st.spinner("Creating viral tips..."):
             payload = {
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
-                    {"role": "system", "content": "You are a viral short-form content expert for luxury interiors. Respond ONLY with 5 numbered bullet points, each 12–18 words max. Make them visual, actionable, and addictive."},
-                    {"role": "user", "content": f"Give me 5 {tip_type.lower()} tips related to '{focus}'. Keep each tip under 18 words."}
+                    {"role": "system", "content": "You are a luxury interiors content creator for SM Interiors. Write exactly 5 short, punchy, visual tips (12–20 words each). Number them 1–5. No intro text."},
+                    {"role": "user", "content": f"Create 5 TikTok/Reels tips about the {focus} or how to style it."}
                 ],
-                "temperature": 0.85,
-                "max_tokens": 500
+                "temperature": 0.9,
+                "max_tokens": 400
             }
-            result = ask_groq(payload)
-            if result:
-                st.session_state.tips = result.strip()
+            try:
+                r = requests.post("https://api.groq.com/openai/v1/chat/completions",
+                                json=payload,
+                                headers={"Authorization": f"Bearer {st.secrets.groq_key}"})
+                tips = r.json()["choices"][0]["message"]["content"]
+                st.session_state.tips = tips
                 st.success("Tips ready!")
-                st.markdown(result)
-            else:
-                st.error("Failed – check your Groq key")
+                st.markdown(f"**{tips}**")
+            except:
+                st.error("Check your Groq key in secrets")
 
-# ────────────────────────────── VIDEO CREATOR ──────────────────────────────
+# ============================= TAB 2: Make Video =============================
 with tab2:
-    st.header("Turn Any Tip into a 6-Second Creative Video")
-    
-    default_tips = st.session_state.get("tips", "")
-    tip_text = st.text_area("Paste one tip here (or write your own)", height=120, value=default_tips.split("\n")[0] if default_tips else "")
-    
+    st.markdown("### Create Video from Any Tip")
+
+    if "tips" not in st.session_state:
+        st.info("First generate tips in the left tab →")
+        st.stop()
+
+    tips_list = [line.strip() for line in st.session_state.tips.split("\n") if line.strip() and line[0].isdigit()]
+    selected_tip = st.radio("Choose which tip to turn into video", tips_list, index=0)
+
     col1, col2 = st.columns(2)
     with col1:
-        bg_music = st.selectbox("Music", list(MUSIC.keys()), index=0)
+        price = st.text_input("Price (optional)", "Ksh 12,500")
     with col2:
-        optional_img = st.file_uploader("Optional product image (adds wow factor)", type=["png","jpg","jpeg"])
+        product_img_upload = st.file_uploader("Product image (optional – will auto-remove background)", type=["png","jpg"])
 
-    if st.button("Create Creative Video", type="primary"):
-        if not tip_text.strip():
-            st.error("Write or paste a tip first!")
-        else:
-            with st.status("Cooking your video...") as status:
-                status.write("Preparing canvas...")
-                
-                # Optional product image (with background removal)
-                product_img = None
-                if optional_img:
-                    raw = Image.open(optional_img).convert("RGBA")
-                    clean = remove(raw.getdata())
-                    product_img = Image.open(io.BytesIO(clean)).convert("RGBA")
-                    # resize to fit nicely
-                    product_img = product_img.resize((550, 550), Image.LANCZOS)
+    if st.button("Create Video – SM Interiors Style", type="primary"):
+        with st.status("Rendering your luxury creative…", expanded=True) as status:
+            status.write("Loading assets…")
 
-                # Generate frames
-                frames = []
-                for i in range(FPS * DURATION):
-                    t = i / (FPS * DURATION)  # 0 → 1
-                    
-                    canvas = Image.new("RGBA", (WIDTH, HEIGHT), "#1a120f")
-                    draw = ImageDraw.Draw(canvas)
+            # Load & process product image
+            product = None
+            if product_img_upload:
+                raw = Image.open(product_img_upload).convert("RGBA")
+                removed = remove(raw.tobytes())
+                product = Image.open(io.BytesIO(removed)).convert("RGBA").resize((580, 580), Image.LANCZOS)
 
-                    # Subtle gold gradient bars
-                    for y in range(0, HEIGHT, 200):
-                        alpha = int(80 * (1 - abs(t*2 - 1)))
-                        draw.rectangle([0, y, WIDTH, y+80], fill=f"#D2A544{hex(alpha)[2:].zfill(2)}")
+            # Load logo
+            try:
+                logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA").resize((200, 100), Image.LANCZOS)
+            except:
+                logo = None
 
-                    # Product (if any) – elastic pop-in
-                    if product_img and t > 0.2:
-                        scale = ease_out_elastic(min((t-0.2)/0.8, 1.0))
-                        w = int(550 * scale)
-                        h = int(550 * scale)
-                        resized = product_img.resize((w, h), Image.LANCZOS)
+            frames = []
+            tip_text = selected_tip[2:].strip()  # remove "1. "
+
+            for i in range(FPS * DURATION):
+                t = i / (FPS * DURATION)
+                canvas = Image.new("RGB", (WIDTH, HEIGHT), BG_COLOR)
+                draw = ImageDraw.Draw(canvas)
+
+                # Gold curved shapes
+                alpha_img = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+                alpha_draw = ImageDraw.Draw(alpha_img)
+                draw_curved_shapes(alpha_draw)
+                canvas = Image.composite(canvas, Image.new("RGB", canvas.size, GOLD), alpha_img.convert("L"))
+
+                # Logo top left
+                if logo and t > 0.2:
+                    opacity = min((t - 0.2)/0.3, 1.0)
+                    logo_layer = logo.copy()
+                    logo_layer.putalpha(int(255 * opacity))
+                    canvas.paste(logo_layer, (40, 40), logo_layer)
+
+                # Product reveal (elastic bounce)
+                if product and t > 0.4:
+                    scale = ease_out_quart(min((t - 0.4)/0.6, 1.0))
+                    w = int(580 * scale)
+                    h = int(580 * scale)
+                    resized = product.resize((w, h), Image.LANCZOS)
+                    x = (WIDTH - w) // 2
+                    y = int(HEIGHT * 0.45 - h//2 + math.sin(t*15)*10)
+                    canvas.paste(resized, (x, y), resized)
+
+                # Typing text effect – from top to bottom
+                if t > 1.0:
+                    chars_to_show = int((t - 1.0) * 2.5 * len(tip_text))  # speed control
+                    display_text = tip_text[:chars_to_show]
+
+                    font = get_font(62)
+                    lines = []
+                    words = display_text.split()
+                    line = ""
+                    for word in words:
+                        if draw.textbbox((0,0), line + word, font=font)[2] < WIDTH - 100:
+                            line += (" " + word if line else word)
+                        else:
+                            lines.append(line)
+                            line = word
+                    if line: lines.append(line)
+
+                    y_start = 180
+                    for line in lines:
+                        bbox = draw.textbbox((0,0), line, font=font)
+                        w = bbox[2] - bbox[0]
                         x = (WIDTH - w) // 2
-                        y = int(HEIGHT * 0.38 - h//2 + math.sin(t*10)*8)
-                        canvas.paste(resized, (x, y), resized)
+                        # Gold glow
+                        for dx, dy in [(0,0), (2,2), (-2,-2), (3,3), (-3,-3)]:
+                            draw.text((x+dx, y_start+dy), line, font=font, fill=GOLD)
+                        draw.text((x, y_start), line, font=font, fill=WHITE)
+                        y_start += 82
 
-                    # Logo top-left
-                    try:
-                        logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA")
-                        logo = logo.resize((180, 90), Image.LANCZOS)
-                        canvas.paste(logo, (40, 40), logo)
-                    except: pass
+                # Price tag animation
+                if price and t > 4.5:
+                    alpha = min((t - 4.5)/0.8, 1.0)
+                    draw.rectangle([WIDTH-280, 80, WIDTH-40, 160], fill=GOLD)
+                    draw.text((WIDTH-260, 95), price, font=get_font(52), fill=BG_COLOR)
 
-                    # Main tip text – typewriter + glow
-                    if t > 0.4:
-                        visible_ratio = min((t - 0.4) / 0.4, 1.0)
-                        visible_chars = int(len(tip_text) * visible_ratio)
-                        display_text = tip_text[:visible_chars]
-                        
-                        font = get_font(68)
-                        bbox = draw.textbbox((0,0), display_text, font=font)
-                        text_w = bbox[2] - bbox[0]
-                        text_x = (WIDTH - text_w) // 2
-                        text_y = HEIGHT - 360
+                # Bottom branding
+                draw.text((50, HEIGHT-100), "SM INTERIORS", font=get_font(42), fill=GOLD)
+                draw.text((50, HEIGHT-60), "0710 895 737", font=get_font(38), fill=WHITE)
 
-                        # Glow
-                        for dx in [-4,0,4]:
-                            for dy in [-4,0,4]:
-                                if dx or dy:
-                                    draw.text((text_x+dx, text_y+dy), display_text, font=font, fill="#D2A544")
+                frames.append(np.array(canvas))
 
-                        # Main text
-                        draw.text((text_x, text_y), display_text, font=font, fill="white")
+            status.write("Adding music & exporting…")
+            clip = ImageSequenceClip(frames, fps=FPS)
 
-                    # Final call-to-action
-                    if t > 0.8:
-                        cta = "Shop SM Interiors →"
-                        f = get_font(48)
-                        bbox = draw.textbbox((0,0), cta, font=f)
-                        w = bbox[2]-bbox[0]
-                        draw.text(((WIDTH-w)//2, HEIGHT-180), cta, font=f, fill="#D2A544")
+            # Download music
+            audio_data = requests.get(MUSIC_URL).content
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+                tmp.write(audio_data)
+                audio_path = tmp.name
 
-                    frames.append(np.array(canvas))
+            audio = AudioFileClip(audio_path).subclip(0, DURATION).audio_fadeout(0.8)
+            final_clip = clip.set_audio(audio)
+            os.unlink(audio_path)
 
-                status.write("Adding music...")
-                clip = ImageSequenceClip(frames, fps=FPS)
-                
-                audio_url = MUSIC[bg_music]
-                audio_file = requests.get(audio_url).content
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-                    tmp.write(audio_file)
-                    tmp_path = tmp.name
-                
-                audio = AudioFileClip(tmp_path).subclip(0, DURATION).audio_fadeout(0.5)
-                final = clip.set_audio(audio)
-                os.unlink(tmp_path)
+            out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            final_clip.write_videofile(out_path, codec="libx264", audio_codec="aac", fps=FPS, logger=None)
 
-                status.write("Exporting video...")
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as out:
-                    final.write_videofile(out.name, codec="libx264", audio_codec="aac", logger=None)
-                    video_path = out.name
+            status.update(label="Your SM Interiors Creative is Ready!", state="complete")
 
-                status.update(label="Done! Your creative is ready ↓", state="complete")
-                st.video(video_path)
-                
-                with open(video_path, "rb") as f:
-                    st.download_button("Download Creative Video", f, f"sm_diy_creative.mp4", "video/mp4")
-                os.unlink(video_path)
+            st.video(out_path)
+            with open(out_path, "rb") as f:
+                st.download_button(
+                    label="Download Video",
+                    data=f,
+                    file_name="sm_interiors_tip_video.mp4",
+                    mime="video/mp4"
+                )
+            os.unlink(out_path)
 
-# Simple elastic easing
-def ease_out_elastic(t):
-    if t <= 0: return 0
-    if t >= 1: return 1
-    return 2**(-10*t) * math.sin((t*10 - 0.75) * (2*math.pi)/3) + 1
+st.markdown("<p style='text-align:center; color:#D4AF37; margin-top:50px;'>Made with love for SM Interiors – Dubai & Nairobi</p>", unsafe_allow_html=True)
