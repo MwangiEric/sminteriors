@@ -25,9 +25,7 @@ MUSIC_TRACKS = {
 # ================================
 # SECRETS CHECK
 # ================================
-if "groq_key" not in st.secrets:
-    st.error("Missing `groq_key` in Secrets! Add it in Streamlit settings.")
-    st.stop()
+# st.secrets is handled by Streamlit environment
 
 HEADERS = {
     "Authorization": f"Bearer {st.secrets['groq_key']}",
@@ -93,7 +91,7 @@ BRAND_PRIMARY = "#4C3B30"
 BRAND_ACCENT = "#D2A544"
 
 TEMPLATES = {
-    "SM Classic": {"bg_grad": [BRAND_PRIMARY, "#2a201b"], "accent": "#FFFFFF", "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "none"}, # Changed accent to White for better text visibility
+    "SM Classic": {"bg_grad": [BRAND_PRIMARY, "#2a201b"], "accent": "#FFFFFF", "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "none"},
     "Gold Diagonal": {"bg_grad": [BRAND_PRIMARY, "#3e2e24"], "accent": BRAND_ACCENT, "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "diagonal", "graphic_color": BRAND_ACCENT},
     "Gold Circles": {"bg_grad": [BRAND_PRIMARY, "#332A22"], "accent": BRAND_ACCENT, "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "circular", "graphic_color": BRAND_ACCENT},
     "Gold Split": {"bg_grad": [BRAND_PRIMARY, BRAND_PRIMARY], "accent": "#FFFFFF", "text": "#FFFFFF", "price_bg": BRAND_ACCENT, "price_text": "#000000", "graphic_type": "split", "graphic_color": BRAND_ACCENT},
@@ -281,6 +279,13 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
     product_box = next((b for b in boxes if b["role"] == "product"), None)
     if product_box:
         b = product_box
+        
+        # --- TIP VIDEO MODIFICATION: Push product up to make room for tips ---
+        if content_type == "Tip Video":
+            b["y"] = 250
+            b["h"] = 400
+        # --------------------------------------------------------------------
+        
         # Use slightly faster scale animation for 5s video focus
         scale = ease_out_elastic(min(t * 1.5, 1.0)) 
         if scale > 0.02:
@@ -289,7 +294,6 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
             
             # Shadow
             shadow = prod.copy().convert("L")
-            shadow = ImageOps.invert(shadow)
             shadow = shadow.point(lambda p: p * 0.3)
             shadow = shadow.convert("RGBA")
             shadow = shadow.filter(ImageFilter.GaussianBlur(20))
@@ -313,14 +317,13 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
         y_start = contact_box.get('y', 1200)
         draw_centered_text(draw, texts["contact"], y_start, get_font(32), T["text"], max_width=600)
         
-    # 2b. Draw Caption/Hook (Applies to all content types)
+    # 2b. Draw Caption/Hook (Applies to all content types - this is the title)
     caption_box = next((b for b in boxes if b["role"] == "caption"), None)
     if caption_box and t > 1.0:
         # Use large font for high impact/early attention
         y_start = caption_box.get('y', 920)
         draw_centered_text(draw, texts["caption"], y_start, get_font(60) if caption_box["role"] == "CAPTION_HEADLINE" else get_font(52), T["accent"], max_width=600)
 
-        
     # 2c. Draw Price (Only for Product Showcase - Pillar A/C)
     if content_type == "Product Showcase":
         price_box = next((b for b in boxes if b["role"] == "price"), None)
@@ -360,6 +363,58 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
                 price_text_y = PRICE_Y_START + (PRICE_H - price_text_bbox_h) // 2 - 10 
                 
                 draw_centered_text(draw, texts["price"], price_text_y, price_font, T["price_text"], max_width=PRICE_W)
+                
+    # 2d. Draw TIP Animation (Only for Tip Video - Pillar B)
+    if content_type == "Tip Video":
+        
+        # 2d.i. Process Tip Content & Time
+        tip_text = texts.get("full_tips", "")
+        # Parse markdown bullet points
+        tips = [line.strip('*').strip('-').strip() for line in tip_text.split('\n') if line.strip().startswith('*') or line.strip().startswith('-')]
+        
+        # Animation timing
+        display_duration = DURATION - 1.5 # Allow 1.5s for intro/outro
+        tip_interval = display_duration / max(1, len(tips))
+        
+        if tips and display_duration > 0:
+            
+            # Define text styles and starting area
+            tip_font = get_font(42)
+            line_height = 60 # Space between tips
+            start_y = 700 # Start position below the main product/image
+            
+            # Animate the tips one by one
+            for i, tip in enumerate(tips):
+                
+                tip_start_time = 1.2 + (i * tip_interval)
+                
+                if t >= tip_start_time:
+                    
+                    y_pos = start_y + (i * line_height)
+                    
+                    # Calculate tip width for the background box
+                    tip_w = draw.textbbox((0,0), tip, font=tip_font)[2]
+                    padding = 20
+                    
+                    # --- Animate Opacity (Fade In) ---
+                    fade_time = 0.3
+                    alpha_ratio = min(1.0, (t - tip_start_time) / fade_time)
+                    alpha = int(255 * alpha_ratio)
+                    
+                    # Draw semi-transparent background rectangle
+                    draw.rounded_rectangle(
+                        [ (WIDTH-tip_w-padding)//2 - 10, y_pos - 15, (WIDTH+tip_w+padding)//2 + 10, y_pos + line_height - 15],
+                        radius=10,
+                        fill=(*hex_to_rgb(BRAND_ACCENT), int(180 * alpha_ratio)) # Semi-transparent accent background
+                    )
+                    
+                    # Draw the tip text
+                    draw.text(
+                        ((WIDTH - tip_w) // 2, y_pos - 10), 
+                        tip, 
+                        font=tip_font, 
+                        fill=(*hex_to_rgb(T["text"]), alpha)
+                    )
 
 
     # --- BLOCK 3: Draw Logo (Highest Layer) ---
@@ -418,9 +473,9 @@ with st.sidebar:
             u_tips_text = generate_tips(u_type, u_model)
             st.session_state['generated_tips'] = u_tips_text
         
-        u_caption_text = st.text_area("Final Caption/Hook (The Tip Title)", 
-                                        value=st.session_state.get('generated_tips', '5 Secrets to a Luxe Home'),
-                                        help="This text will appear large and early on the screen.")
+        u_caption_text = st.text_area("Final Caption/Hook (The Tip Title & Full List)", 
+                                        value=st.session_state.get('generated_tips', '5 Secrets to a Luxe Home\n* Tip one\n* Tip two\n* Tip three\n* Tip four\n* Tip five'),
+                                        help="The first line is the title. The bullet points below will be animated.")
         u_contact = st.text_input("Contact/URL (Small Footer)", "sm.co.ke")
         u_style = st.selectbox("Template", ["SM Classic", "Gold Diagonal"])
         u_music = st.selectbox("Music", list(MUSIC_TRACKS.keys()))
@@ -450,8 +505,9 @@ if btn_ad and u_file:
     if u_content_type == "Product Showcase (Pillar A/C)":
         hook, layout = get_data_groq(product_img, u_model)
     else: # Tip Video Logic
-        hook = u_caption_text
-        # Force a Tip-Video-specific layout (product large center, huge title, no price)
+        # Use the first line as the headline hook
+        hook = u_caption_text.split('\n')[0].strip() or '5 Secrets to a Luxe Home'
+        # Force a Tip-Video-specific layout for the title
         fixed_layout = {
             'logo': 'LOGO_TOP', 
             'product': 'PRODUCT_CENTER', 
@@ -477,6 +533,10 @@ if btn_ad and u_file:
     # 3. Render frames
     status.update(label="Animating frames...")
     texts = {"caption": hook, "price": u_price, "contact": u_contact}
+    
+    # --- TIP VIDEO MODIFICATION: Pass the full tip text for internal animation ---
+    if u_content_type == "Tip Video (Pillar B)":
+        texts["full_tips"] = u_caption_text
     
     # Pass the selected content type to the frame renderer
     frames = [create_frame(i/FPS, product_img, layout, texts, u_style, logo_img, u_content_type.split(' ')[0]) for i in range(FPS*DURATION)]
