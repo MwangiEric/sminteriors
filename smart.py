@@ -154,21 +154,25 @@ def get_data_groq(img, model_name):
     }
 
     # Encode image (b64 logic remains UNCHANGED)
-    buf = io.BytesIO()
-    rgb = img.convert("RGB") if img.mode == "RGBA" else img
-    rgb.save(buf, format="JPEG", quality=90)
-    b64 = base64.b64encode(buf.getvalue()).decode()
-
-    # Hook (vision model logic remains UNCHANGED)
-    hook_payload = {
-        "model": "llama-3.2-11b-vision-preview",
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": f"Write a 4–6 word high-impact hook for this {model_name} ad. Focus on aspirational words."},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
-        ]}],
-        "max_tokens": 30
-    }
-    hook = ask_groq(hook_payload) or "Elevate Your Living Space"
+    # Only encode if an image is actually passed (for Tip Videos without an image)
+    if img:
+        buf = io.BytesIO()
+        rgb = img.convert("RGB") if img.mode == "RGBA" else img
+        rgb.save(buf, format="JPEG", quality=90)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        
+        # Hook (vision model logic remains UNCHANGED)
+        hook_payload = {
+            "model": "llama-3.2-11b-vision-preview",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": f"Write a 4–6 word high-impact hook for this {model_name} ad. Focus on aspirational words."},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            ]}],
+            "max_tokens": 30
+        }
+        hook = ask_groq(hook_payload) or "Elevate Your Living Space"
+    else:
+        hook = "Elevate Your Living Space"
 
     # Layout (Groq MUST select from pre-defined creative blocks)
     block_names = [k for k in FIXED_LAYOUT_MAP.keys() if k != "TIP_TEXT_CENTER"] # Exclude TIP block from ad choice
@@ -277,7 +281,9 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
 
     # --- BLOCK 1: Draw Product & Shadow (Layer 1) ---
     product_box = next((b for b in boxes if b["role"] == "product"), None)
-    if product_box:
+    
+    # Only try to draw product if an image exists
+    if product_box and img: 
         b = product_box
         
         # --- TIP VIDEO MODIFICATION: Push product up to make room for tips ---
@@ -324,7 +330,7 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
         y_start = caption_box.get('y', 920)
         draw_centered_text(draw, texts["caption"], y_start, get_font(60) if caption_box["role"] == "CAPTION_HEADLINE" else get_font(52), T["accent"], max_width=600)
 
-    # 2c. Draw Price (Only for Product Showcase - Pillar A/C)
+    # 2c. Draw Price (Only for Product Showcase - Pillar A/C) - unchanged
     if content_type == "Product Showcase":
         price_box = next((b for b in boxes if b["role"] == "price"), None)
         if price_box and t > 1.4:
@@ -372,8 +378,8 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
         # Parse markdown bullet points
         tips = [line.strip('*').strip('-').strip() for line in tip_text.split('\n') if line.strip().startswith('*') or line.strip().startswith('-')]
         
-        # Animation timing
-        display_duration = DURATION - 1.5 # Allow 1.5s for intro/outro
+        # Use full video duration for tips presentation
+        display_duration = DURATION - 1.5 
         tip_interval = display_duration / max(1, len(tips))
         
         if tips and display_duration > 0:
@@ -381,7 +387,8 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
             # Define text styles and starting area
             tip_font = get_font(42)
             line_height = 60 # Space between tips
-            start_y = 700 # Start position below the main product/image
+            # If there's an image, start lower; if not, use the full space
+            start_y = 450 if img else 450 
             
             # Animate the tips one by one
             for i, tip in enumerate(tips):
@@ -464,7 +471,8 @@ with st.sidebar:
         
     else: # Tip Video
         st.subheader("Tip Content Details")
-        u_file = st.file_uploader("Background Image", type=["png","jpg","jpeg"])
+        # MADE OPTIONAL
+        u_file = st.file_uploader("Background Image (Optional)", type=["png","jpg","jpeg"]) 
         u_model = st.text_input("Product/Topic for Tip", "Velvet Sofa Care")
         u_type = st.radio("Tip Category", ["DIY Tips", "Furniture Tips", "Interior Design Tips", "Maintenance Tips"])
         
@@ -487,22 +495,28 @@ with st.sidebar:
 
 
 # Video Ad Generation Logic
-if btn_ad and u_file:
+if btn_ad:
     # Set the duration variable used by the moviepy functions
     DURATION = u_duration 
     
     status = st.status(f"Creating your {u_content_type} video...", expanded=True)
 
-    # 1. Process image
-    status.update(label="Enhancing background image...")
-    raw = Image.open(u_file).convert("RGBA")
-    product_img = process_image_pro(raw)
-    st.image(product_img, "Processed Image", width=200)
+    # 1. Process image (Conditional: only if file is uploaded)
+    product_img = None
+    if u_file:
+        status.update(label="Enhancing background image...")
+        raw = Image.open(u_file).convert("RGBA")
+        product_img = process_image_pro(raw)
+        st.image(product_img, "Processed Image", width=200)
 
     # 2. AI hook + smart layout mapping
     status.update(label="AI determining layout...")
     
     if u_content_type == "Product Showcase (Pillar A/C)":
+        if not u_file:
+            st.error("Product Showcase requires an image. Please upload one.")
+            status.update(label="Failed", state="error")
+            st.stop()
         hook, layout = get_data_groq(product_img, u_model)
     else: # Tip Video Logic
         # Use the first line as the headline hook
@@ -566,7 +580,5 @@ if btn_ad and u_file:
         os.unlink(tmp.name)
 
     status.update(label="Done! Your ad is ready", state="complete")
-elif btn_ad and not u_file:
-    st.error("Please upload an image before generating.")
 
 st.caption("AdGen EVO by Grok × Streamlit – 2025 Edition")
