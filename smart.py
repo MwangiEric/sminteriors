@@ -126,7 +126,7 @@ def draw_wrapped_text(draw, text, box, font, color):
 
 
 # ================================
-# GROQ HELPERS (SMART LAYOUT V2 - CAPTURES ALL BLOCKS)
+# GROQ HELPERS (SMART LAYOUT V2 - UNCHANGED)
 # ================================
 def ask_groq(payload):
     try:
@@ -153,15 +153,14 @@ def get_data_groq(img, model_name):
         "TIP_TEXT_CENTER":  {"x": 60, "y": 800, "w": 600, "h": 400}, # New block for Pillar B tip content
     }
 
-    # Encode image (b64 logic remains UNCHANGED)
-    # Only encode if an image is actually passed (for Tip Videos without an image)
+    # Encode image 
     if img:
         buf = io.BytesIO()
         rgb = img.convert("RGB") if img.mode == "RGBA" else img
         rgb.save(buf, format="JPEG", quality=90)
         b64 = base64.b64encode(buf.getvalue()).decode()
         
-        # Hook (vision model logic remains UNCHANGED)
+        # Hook 
         hook_payload = {
             "model": "llama-3.2-11b-vision-preview",
             "messages": [{"role": "user", "content": [
@@ -170,12 +169,12 @@ def get_data_groq(img, model_name):
             ]}],
             "max_tokens": 30
         }
-        hook = ask_groq(hook_payload) or "Elevate Your Living Space"
+        hook = ask_groq(hook_payload) or "Redefine Your Living Space" 
     else:
-        hook = "Elevate Your Living Space"
+        hook = "Redefine Your Living Space"
 
-    # Layout (Groq MUST select from pre-defined creative blocks)
-    block_names = [k for k in FIXED_LAYOUT_MAP.keys() if k != "TIP_TEXT_CENTER"] # Exclude TIP block from ad choice
+    # Layout 
+    block_names = [k for k in FIXED_LAYOUT_MAP.keys() if k != "TIP_TEXT_CENTER"] 
     
     layout_payload = {
         "model": "llama-3.3-70b-versatile",
@@ -221,7 +220,7 @@ def get_data_groq(img, model_name):
 
 
 # ================================
-# CONTENT IDEA GENERATOR (PILLAR B)
+# CONTENT IDEA GENERATOR (PILLAR B) (UNCHANGED)
 # ================================
 def generate_tips(content_type, keyword):
     system = "You are a luxury furniture brand content expert. Reply ONLY with markdown bullet points, no intro/outro. Use very concise language suitable for quick on-screen text."
@@ -257,7 +256,7 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
     canvas = Image.new("RGBA", (WIDTH, HEIGHT))
     draw = ImageDraw.Draw(canvas)
 
-    # Background Gradient and Template Graphics (UNCHANGED)
+    # Background Gradient
     c1 = hex_to_rgb(T["bg_grad"][0])
     c2 = hex_to_rgb(T["bg_grad"][1])
     for y in range(HEIGHT):
@@ -282,17 +281,14 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
     # --- BLOCK 1: Draw Product & Shadow (Layer 1) ---
     product_box = next((b for b in boxes if b["role"] == "product"), None)
     
-    # Only try to draw product if an image exists
     if product_box and img: 
         b = product_box
         
-        # --- TIP VIDEO MODIFICATION: Push product up to make room for tips ---
+        # Adjust product position for Tip Video, otherwise keep standard placement
         if content_type == "Tip Video":
             b["y"] = 250
             b["h"] = 400
-        # --------------------------------------------------------------------
         
-        # Use slightly faster scale animation for 5s video focus
         scale = ease_out_elastic(min(t * 1.5, 1.0)) 
         if scale > 0.02:
             pw, ph = int(b["w"]*scale), int(b["h"]*scale)
@@ -308,7 +304,7 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
                          (int(b["x"]+(b["w"]-pw)//2+10), int(b["y"]+(b["h"]-ph)//2+40)), 
                          shadow)
 
-            # Product Placement (with float/int fix and explicit mask)
+            # Product Placement
             prod_mask = prod.getchannel('A')
             canvas.paste(prod, 
                          (int(b["x"]+(b["w"]-pw)//2), 
@@ -323,105 +319,112 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
         y_start = contact_box.get('y', 1200)
         draw_centered_text(draw, texts["contact"], y_start, get_font(32), T["text"], max_width=600)
         
-    # 2b. Draw Caption/Hook (Applies to all content types - this is the title)
+    # 2b. Draw Caption/Hook (Title)
     caption_box = next((b for b in boxes if b["role"] == "caption"), None)
     if caption_box and t > 1.0:
-        # Use large font for high impact/early attention
-        y_start = caption_box.get('y', 920)
-        draw_centered_text(draw, texts["caption"], y_start, get_font(60) if caption_box["role"] == "CAPTION_HEADLINE" else get_font(52), T["accent"], max_width=600)
+        # The hook text still uses a standard fade-in for immediate impact
+        draw_centered_text(draw, texts["caption"], caption_box.get('y', 920), 
+                           get_font(60) if caption_box["role"] == "CAPTION_HEADLINE" else get_font(52), 
+                           T["accent"], max_width=600)
 
-    # 2c. Draw Price (Only for Product Showcase - Pillar A/C) - unchanged
+    # 2c. Draw Price (Product Showcase ONLY)
     if content_type == "Product Showcase":
         price_box = next((b for b in boxes if b["role"] == "price"), None)
         if price_box and t > 1.4:
             PRICE_X, PRICE_Y_START, PRICE_W, PRICE_H = price_box["x"], price_box["y"], price_box["w"], price_box["h"]
             
-            if PRICE_Y_START < 400: 
-                # --- Draw PRICE_BADGE_TR Logic (Circular, High Impact) ---
+            if PRICE_Y_START < 400: # Badge logic
+                # ... (Price Badge logic remains the same)
                 r = int(PRICE_W / 2)
                 center_x = PRICE_X + r
                 center_y = PRICE_Y_START + r
-                
-                draw.ellipse([PRICE_X, PRICE_Y_START, PRICE_X + PRICE_W, PRICE_Y_START + PRICE_H], 
-                             fill="#000000") 
-                
+                draw.ellipse([PRICE_X, PRICE_Y_START, PRICE_X + PRICE_W, PRICE_Y_START + PRICE_H], fill="#000000") 
                 badge_font_big = get_font(50)
                 badge_font_small = get_font(24)
-                
                 price_parts = texts["price"].split()
                 main_text = price_parts[0] if price_parts else "SALE"
                 sub_text = price_parts[1] if len(price_parts) > 1 else "OFFER"
-                
                 w1 = draw.textbbox((0,0), main_text, font=badge_font_big)[2]
                 draw.text((center_x - w1//2, center_y - 30), main_text, font=badge_font_big, fill="#FFFFFF")
-                
                 w2 = draw.textbbox((0,0), sub_text, font=badge_font_small)[2]
                 draw.text((center_x - w2//2, center_y + 30), sub_text, font=badge_font_small, fill="#FFFFFF")
-
-            else:
-                # --- Draw Standard PRICE_BUTTON Logic (Rounded Rectangle) ---
+            else: # Button logic
+                # ... (Price Button logic remains the same)
                 draw.rounded_rectangle([PRICE_X, PRICE_Y_START, PRICE_X + PRICE_W, PRICE_Y_START + PRICE_H], 
-                                       radius=30, 
-                                       fill=T["price_bg"])
-                
+                                       radius=30, fill=T["price_bg"])
                 price_font = get_font(68)
                 price_text_bbox_h = draw.textbbox((0,0), texts["price"].split('\n')[0], font=price_font)[3] 
                 price_text_y = PRICE_Y_START + (PRICE_H - price_text_bbox_h) // 2 - 10 
-                
                 draw_centered_text(draw, texts["price"], price_text_y, price_font, T["price_text"], max_width=PRICE_W)
                 
-    # 2d. Draw TIP Animation (Only for Tip Video - Pillar B)
+    # 2d. Draw TYPING ANIMATION (Only for Tip Video - Pillar B)
     if content_type == "Tip Video":
         
         # 2d.i. Process Tip Content & Time
         tip_text = texts.get("full_tips", "")
-        # Parse markdown bullet points
+        # Parse markdown bullet points, keeping non-empty lines
         tips = [line.strip('*').strip('-').strip() for line in tip_text.split('\n') if line.strip().startswith('*') or line.strip().startswith('-')]
         
-        # Use full video duration for tips presentation
-        display_duration = DURATION - 1.5 
-        tip_interval = display_duration / max(1, len(tips))
+        # Constants for animation timing
+        CHAR_PER_SECOND = 40  # Speed of typing effect (characters per second)
+        START_TIME = 1.8      # Time to start the first tip after the title hook
+        TIP_DELAY = 0.5       # Delay before starting the next tip (after the previous one finishes)
         
-        if tips and display_duration > 0:
-            
-            # Define text styles and starting area
+        if tips:
             tip_font = get_font(42)
-            line_height = 60 # Space between tips
-            # If there's an image, start lower; if not, use the full space
-            start_y = 450 if img else 450 
+            line_height = 70 
+            start_y = 450 if img else 450
             
-            # Animate the tips one by one
-            for i, tip in enumerate(tips):
+            cumulative_delay = START_TIME
+            
+            for i, full_tip in enumerate(tips):
                 
-                tip_start_time = 1.2 + (i * tip_interval)
+                tip_len = len(full_tip)
+                tip_duration = tip_len / CHAR_PER_SECOND
+                
+                # Time window for this specific tip's typing animation
+                tip_start_time = cumulative_delay
+                tip_end_time = tip_start_time + tip_duration
                 
                 if t >= tip_start_time:
                     
                     y_pos = start_y + (i * line_height)
                     
-                    # Calculate tip width for the background box
-                    tip_w = draw.textbbox((0,0), tip, font=tip_font)[2]
+                    # 1. Calculate the number of characters to show up to the current frame time (t)
+                    time_in_tip = max(0, t - tip_start_time)
+                    chars_to_show = min(tip_len, math.ceil(time_in_tip * CHAR_PER_SECOND))
+                    
+                    current_tip_text = full_tip[:chars_to_show]
+                    
+                    tip_w = draw.textbbox((0,0), full_tip, font=tip_font)[2]
                     padding = 20
                     
-                    # --- Animate Opacity (Fade In) ---
-                    fade_time = 0.3
-                    alpha_ratio = min(1.0, (t - tip_start_time) / fade_time)
-                    alpha = int(255 * alpha_ratio)
+                    # 2. Draw the background box based on full tip width (it snaps in when the tip starts)
+                    # The box opacity is tied to the start time of the tip
+                    alpha_ratio_bg = min(1.0, (t - tip_start_time) / 0.2)
                     
-                    # Draw semi-transparent background rectangle
                     draw.rounded_rectangle(
                         [ (WIDTH-tip_w-padding)//2 - 10, y_pos - 15, (WIDTH+tip_w+padding)//2 + 10, y_pos + line_height - 15],
                         radius=10,
-                        fill=(*hex_to_rgb(BRAND_ACCENT), int(180 * alpha_ratio)) # Semi-transparent accent background
+                        fill=(*hex_to_rgb(BRAND_ACCENT), int(180 * alpha_ratio_bg)) 
                     )
                     
-                    # Draw the tip text
+                    # 3. Draw the animated (typed) text
+                    # The text alpha is always 255 (fully opaque) because the typing effect itself handles the reveal.
                     draw.text(
                         ((WIDTH - tip_w) // 2, y_pos - 10), 
-                        tip, 
+                        current_tip_text, 
                         font=tip_font, 
-                        fill=(*hex_to_rgb(T["text"]), alpha)
+                        fill=T["text"]
                     )
+                
+                # Update the cumulative delay for the next tip
+                # The next tip starts only after the current one is fully typed + a short delay.
+                cumulative_delay = tip_end_time + TIP_DELAY
+                
+                # Safety break if the tips run longer than video duration
+                if cumulative_delay > DURATION - 0.5:
+                    break
 
 
     # --- BLOCK 3: Draw Logo (Highest Layer) ---
@@ -446,34 +449,41 @@ def create_frame(t, img, boxes, texts, tpl_name, logo_img, content_type):
 # ================================
 st.title("AdGen EVO – SM Interiors Edition")
 
+# Initialize session state for tip text
+if 'generated_tips' not in st.session_state:
+    # Example generated tip list
+    st.session_state['generated_tips'] = '5 Storage Hacks for Small Spaces\n* Utilize vertical shelving units.\n* Opt for multi-functional furniture.\n* Use hidden storage like ottoman beds.\n* Declutter ruthlessly once a month.\n* Maximize cabinet depth with risers.'
+
+
 with st.sidebar:
     st.header("TikTok Content Builder")
     u_content_type = st.radio(
         "Content Pillar", 
         ["Product Showcase (Pillar A/C)", "Tip Video (Pillar B)"],
+        # Default to Tip Video to showcase the new animation
+        index=1, 
         help="Showcase drives sales; Tip Videos drive Saves/Shares."
     )
     st.markdown("---")
 
     st.header("Video Settings")
-    u_duration = st.slider("Video Duration (Seconds)", min_value=3, max_value=8, value=5, step=1, help="5s is ideal for high TikTok completion rate.")
+    u_duration = st.slider("Video Duration (Seconds)", min_value=3, max_value=8, value=6, step=1, help="6s allows enough time for the typewriter effect to run.")
     
     # Only show price/contact if it's a showcase ad
     if u_content_type == "Product Showcase (Pillar A/C)":
         st.subheader("Product Ad Details")
         u_file = st.file_uploader("Product Image", type=["png","jpg","jpeg"])
-        u_model = st.text_input("Product Name", "Luxe Velvet Sofa")
-        u_price = st.text_input("Price / Discount", "Ksh 89,900") 
+        u_model = st.text_input("Product Name", "Walden Dresser")
+        u_price = st.text_input("Price / Discount", "Ksh 49,900") 
         u_contact = st.text_input("Contact Info", "0710 895 737")
         u_style = st.selectbox("Template", list(TEMPLATES.keys()))
         u_music = st.selectbox("Music", list(MUSIC_TRACKS.keys()))
         btn_ad = st.button(f"Generate {u_duration}s Product Ad", type="primary")
         
-    else: # Tip Video
-        st.subheader("Tip Content Details")
-        # MADE OPTIONAL
+    else: # Tip Video (Typing Animation is here)
+        st.subheader("Tip Content Details (Typing Effect)")
         u_file = st.file_uploader("Background Image (Optional)", type=["png","jpg","jpeg"]) 
-        u_model = st.text_input("Product/Topic for Tip", "Velvet Sofa Care")
+        u_model = st.text_input("Product/Topic for Tip", "Storage and organization")
         u_type = st.radio("Tip Category", ["DIY Tips", "Furniture Tips", "Interior Design Tips", "Maintenance Tips"])
         
         # Generator for the hook/caption text
@@ -482,8 +492,8 @@ with st.sidebar:
             st.session_state['generated_tips'] = u_tips_text
         
         u_caption_text = st.text_area("Final Caption/Hook (The Tip Title & Full List)", 
-                                        value=st.session_state.get('generated_tips', '5 Secrets to a Luxe Home\n* Tip one\n* Tip two\n* Tip three\n* Tip four\n* Tip five'),
-                                        help="The first line is the title. The bullet points below will be animated.")
+                                        value=st.session_state.get('generated_tips'),
+                                        help="The first line is the title. The bullet points below will be animated using the new **typing effect**.")
         u_contact = st.text_input("Contact/URL (Small Footer)", "sm.co.ke")
         u_style = st.selectbox("Template", ["SM Classic", "Gold Diagonal"])
         u_music = st.selectbox("Music", list(MUSIC_TRACKS.keys()))
@@ -491,7 +501,7 @@ with st.sidebar:
         # Set placeholder values for consistency
         u_price = "" 
         
-        btn_ad = st.button(f"Generate {u_duration}s Tip Video", type="primary")
+        btn_ad = st.button(f"Generate {u_duration}s Tip Video (Typing Effect)", type="primary")
 
 
 # Video Ad Generation Logic
@@ -518,15 +528,21 @@ if btn_ad:
             status.update(label="Failed", state="error")
             st.stop()
         hook, layout = get_data_groq(product_img, u_model)
-    else: # Tip Video Logic
+    else: # Tip Video Logic (Uses the typing animation)
+        
+        if not st.session_state.get('generated_tips'):
+             st.error("Please generate tips first.")
+             status.update(label="Failed", state="error")
+             st.stop()
+             
         # Use the first line as the headline hook
         hook = u_caption_text.split('\n')[0].strip() or '5 Secrets to a Luxe Home'
-        # Force a Tip-Video-specific layout for the title
+        # Force a fixed layout suitable for text overlay
         fixed_layout = {
             'logo': 'LOGO_TOP', 
             'product': 'PRODUCT_CENTER', 
-            'caption': 'CAPTION_HEADLINE', # Force high-impact title
-            'price': 'PRICE_BUTTON', # Placeholder, but not drawn in create_frame
+            'caption': 'CAPTION_HEADLINE', 
+            'price': 'PRICE_BUTTON', 
             'contact': 'CONTACT_FOOTER'
         }
         layout_map = {
