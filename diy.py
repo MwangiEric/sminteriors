@@ -21,11 +21,14 @@ MUSIC_URL = "https://archive.org/download/bensound-adaytoremember/bensound-adayt
 
 # ────────────────────────────── HELPERS ──────────────────────────────
 def get_font(size):
-    try: return ImageFont.truetype("arial.ttf", size)
-    except: return ImageFont.load_default()
+    try: 
+        return ImageFont.truetype("arial.ttf", size)
+    except: 
+        return ImageFont.load_default()
 
 def ease_out_elastic(t):
-    if t >= 1: return 1
+    if t >= 1: 
+        return 1
     c4 = (2 * math.pi) / 3
     return 2**(-10 * t) * math.sin((t * 10 - 0.75) * c4) + 1
 
@@ -154,7 +157,9 @@ if st.button("Generate Animated Video", type="primary"):
 
         status.write("Exporting video…")
         out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final.write_v to out_path, codec="libx264", audio_codec="aac", fps=FPS, logger=None)
+        
+        # FIXED: Corrected the video writing line
+        final.write_videofile(out_path, codec="libx264", audio_codec="aac", fps=FPS, logger=None)
 
         status.update(label="Your animated creative is ready!", state="complete")
         st.video(out_path)
