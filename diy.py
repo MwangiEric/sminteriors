@@ -8,18 +8,17 @@ from rembg import remove
 st.set_page_config(page_title="SM Interiors TikTok Maker", layout="centered", page_icon="🎯")
 
 # ────────────────────────────── TIKTOK OPTIMIZED SETTINGS ──────────────────────────────
-WIDTH, HEIGHT = 1080, 1920  # True TikTok vertical format
+WIDTH, HEIGHT = 1080, 1920
 FPS = 30
-DURATION = 12  # Slightly longer for better storytelling
+DURATION = 12
 
-BG = "#0A0A0A"  # Pure black for better contrast
-GOLD = "#FFD700"  # Brighter gold for mobile
-ACCENT = "#E8B4B8"  # Rose gold accent
+BG = "#0A0A0A"
+GOLD = "#FFD700"
+ACCENT = "#E8B4B8"
 WHITE = "#FFFFFF"
 
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
-# More energetic TikTok-style music
-MUSIC_URL = "https://cdn.pixabay.com/download/audio/2022/03/15/audio_7e7cbd2f52.mp3?filename=upbeat-ukulele-15144.mp3"
+MUSIC_URL = "https://cdn.pixabay.com/download/audio/2022/03/15/audio_7e7bd2f52.mp3?filename=upbeat-ukulele-15144.mp3"
 
 # ────────────────────────────── HELPERS ──────────────────────────────
 def get_font(size, bold=False):
@@ -42,6 +41,23 @@ def ease_out_bounce(t):
     else:
         t -= (2.625 / 2.75)
         return 7.5625 * t * t + 0.984375
+
+def remove_background(image):
+    """Safely remove background from image"""
+    try:
+        # Convert to bytes buffer for rembg
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        img_byte_arr = img_byte_arr.getvalue()
+        
+        # Remove background
+        cleaned_bytes = remove(img_byte_arr)
+        
+        # Convert back to PIL Image
+        return Image.open(io.BytesIO(cleaned_bytes)).convert("RGBA")
+    except Exception as e:
+        st.warning(f"Background removal failed: {e}. Using original image.")
+        return image.convert("RGBA")
 
 # ────────────────────────────── TIKTOK OPTIMIZED APP ──────────────────────────────
 st.title("🎯 SM Interiors - TikTok Ad Creator")
@@ -67,17 +83,49 @@ with col3:
 with col4:
     show_countdown = st.checkbox("⏰ Add Limited Time Offer", value=True)
 
+# Add fallback options
+st.sidebar.markdown("### 🔧 Troubleshooting")
+use_fallback = st.sidebar.checkbox("Use fallback if background removal fails", value=True)
+
 if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=True):
     with st.status("Creating your TikTok ad...", expanded=True) as status:
         # Process product image
         status.write("🔄 Processing product image...")
         product = None
         if product_img:
-            raw = Image.open(product_img).convert("RGBA")
-            clean = remove(raw.tobytes())
-            product = Image.open(io.BytesIO(clean)).convert("RGBA").resize((800, 800), Image.LANCZOS)
-        
-        logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA").resize((280, 140), Image.LANCZOS)
+            try:
+                raw = Image.open(product_img).convert("RGBA")
+                
+                # Try background removal with error handling
+                if use_fallback:
+                    try:
+                        product = remove_background(raw)
+                        product = product.resize((800, 800), Image.LANCZOS)
+                        status.write("✅ Background removed successfully!")
+                    except Exception as e:
+                        st.error(f"Background removal failed: {e}")
+                        # Fallback: use original image with some processing
+                        product = raw.resize((800, 800), Image.LANCZOS)
+                        # Add a simple white background for better visibility
+                        background = Image.new('RGBA', product.size, (255, 255, 255, 255))
+                        product = Image.alpha_composite(background, product)
+                else:
+                    # Just resize without background removal
+                    product = raw.resize((800, 800), Image.LANCZOS)
+                    
+            except Exception as e:
+                st.error(f"Error processing image: {e}")
+                product = None
+
+        # Load logo with error handling
+        try:
+            logo = Image.open(requests.get(LOGO_URL, stream=True).raw).convert("RGBA").resize((280, 140), Image.LANCZOS)
+        except:
+            # Create a simple text logo as fallback
+            logo = Image.new('RGBA', (280, 140), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(logo)
+            draw.text((20, 50), "SM INTERIORS", font=get_font(32, bold=True), fill=GOLD)
+            status.write("⚠️ Using fallback logo")
 
         status.write("🎬 Creating TikTok-optimized frames...")
         frames = []
@@ -97,7 +145,7 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
 
             # 1. Modern background elements (appear quickly)
             for idx, shape in enumerate(shapes):
-                if t > idx * 0.05:  # Faster appearance
+                if t > idx * 0.05:
                     progress = min((t - idx*0.05) / 0.1, 1.0)
                     if shape[0] == "arc":
                         draw.arc(shape[1], start=shape[2], end=shape[2] + (shape[3]-shape[2])*progress, fill=GOLD, width=shape[4])
@@ -114,15 +162,10 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
             # 3. URGENCY TEXT - Big and attention-grabbing
             if t > 0.5:
                 urgency_alpha = min((t - 0.5)/0.3, 1.0)
-                # Pulsing effect
                 pulse = 1 + 0.1 * math.sin(t * 10)
                 size = int(72 * pulse)
-                try:
-                    font = ImageFont.truetype("arialbd.ttf", size)
-                except:
-                    font = get_font(size)
+                font = get_font(size, bold=True)
                 
-                # Red background for urgency
                 bbox = draw.textbbox((0,0), urgency_text, font=font)
                 w, h = bbox[2]-bbox[0], bbox[3]-bbox[1]
                 x = (WIDTH - w) // 2
@@ -136,12 +179,16 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
                 h = int(800 * scale)
                 resized = product.resize((w, h), Image.LANCZOS)
                 
-                # Add subtle rotation and floating effect
+                # Add subtle floating effect
                 angle = math.sin(t * 8) * 2
                 rotated = resized.rotate(angle, expand=False)
                 
                 x = (WIDTH - w) // 2
                 y = int(HEIGHT * 0.4 - h//2 + math.sin(t*6)*15)
+                
+                # Add a subtle shadow for better visibility
+                shadow = Image.new('RGBA', (w+20, h+20), (0, 0, 0, 100))
+                canvas.paste(shadow, (x-10, y-10), shadow)
                 canvas.paste(rotated, (x, y), rotated)
 
             # 5. PRODUCT STORY - Short, punchy lines
@@ -172,15 +219,14 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
                     w = bbox[2] - bbox[0]
                     x = (WIDTH - w) // 2
                     
-                    # Text shadow for readability
+                    # Text background for better readability
+                    draw.rectangle([x-10, y-5, x+w+10, y+45], fill=(0,0,0,150))
                     draw.text((x+3, y+3), line, font=get_font(42), fill="#000000")
                     draw.text((x, y), line, font=get_font(42), fill=WHITE)
                     y += 50
 
             # 6. PRICE & DISCOUNT - Big and bold
             if t > 4.0:
-                price_alpha = min((t - 4.0)/0.5, 1.0)
-                
                 # Price with strikethrough original
                 original_price = "Ksh 18,000"
                 draw.text((WIDTH-400, 300), original_price, font=get_font(48), fill="#888888")
@@ -196,8 +242,7 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
 
             # 7. LIMITED TIME COUNTDOWN
             if show_countdown and t > 5.0:
-                time_left = max(0, 7 - (t - 5.0) * 7)  # 7 second countdown
-                minutes = int(time_left // 60)
+                time_left = max(0, 7 - (t - 5.0) * 7)
                 seconds = int(time_left % 60)
                 countdown_text = f"⏰ OFFER ENDS IN: {seconds} SECONDS!"
                 
@@ -206,7 +251,6 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
 
             # 8. CALL TO ACTION - Big button style
             if t > 6.0:
-                cta_alpha = min((t - 6.0)/0.5, 1.0)
                 # Pulsing CTA button
                 pulse_size = 1 + 0.05 * math.sin(t * 8)
                 
@@ -224,36 +268,45 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
             frames.append(np.array(canvas))
 
         status.write("🎵 Adding trending audio...")
-        clip = ImageSequenceClip(frames, fps=FPS)
         
-        # Download and add music
-        audio_data = requests.get(MUSIC_URL).content
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-            tmp.write(audio_data)
-            audio = AudioFileClip(tmp.name).subclip(0, DURATION).audio_fadeout(2.0)
-            final = clip.set_audio(audio)
-            os.unlink(tmp.name)
+        try:
+            clip = ImageSequenceClip(frames, fps=FPS)
+            
+            # Download and add music
+            audio_data = requests.get(MUSIC_URL, timeout=10).content
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+                tmp.write(audio_data)
+                audio = AudioFileClip(tmp.name).subclip(0, DURATION).audio_fadeout(2.0)
+                final = clip.set_audio(audio)
+                os.unlink(tmp.name)
 
-        status.write("📹 Exporting TikTok video...")
-        out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        final.write_videofile(out_path, codec="libx264", audio_codec="aac", fps=FPS, logger=None)
+            status.write("📹 Exporting TikTok video...")
+            out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            final.write_videofile(out_path, codec="libx264", audio_codec="aac", fps=FPS, logger=None)
 
-        status.update(label="✅ Your TikTok ad is ready!", state="complete")
-        
-        # Preview and download
-        st.success("🎉 Video created successfully! Perfect for TikTok!")
-        st.video(out_path)
-        
-        with open(out_path, "rb") as f:
-            st.download_button(
-                "📥 DOWNLOAD TIKTOK VIDEO", 
-                f, 
-                "sm_interiors_tiktok.mp4", 
-                "video/mp4",
-                type="primary",
-                use_container_width=True
-            )
-        
+            status.update(label="✅ Your TikTok ad is ready!", state="complete")
+            
+            # Preview and download
+            st.success("🎉 Video created successfully! Perfect for TikTok!")
+            st.video(out_path)
+            
+            with open(out_path, "rb") as f:
+                st.download_button(
+                    "📥 DOWNLOAD TIKTOK VIDEO", 
+                    f, 
+                    "sm_interiors_tiktok.mp4", 
+                    "video/mp4",
+                    type="primary",
+                    use_container_width=True
+                )
+            
+            # Clean up
+            os.unlink(out_path)
+            
+        except Exception as e:
+            st.error(f"Error creating video: {e}")
+            st.info("Try checking your internet connection or using a different image.")
+
         # TikTok tips
         st.markdown("---")
         st.markdown("**🎯 TikTok Posting Tips:**")
@@ -263,5 +316,3 @@ if st.button("🚀 CREATE TIKTOK VIDEO", type="primary", use_container_width=Tru
         - **Post Time**: 7-9 PM when people are browsing
         - **Call to Action**: Ask viewers to comment or DM
         """)
-        
-        os.unlink(out_path)
