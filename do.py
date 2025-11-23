@@ -175,7 +175,4 @@ if st.button("Generate TikTok Video"):
     # Display video in Streamlit
     st.video(video_path)
 
-st.markdown("""
-Note: 
-- This app requires MoviePy, Groq, and FFmpeg installed. Install via `pip install moviepy groq`.
-- For Streamlit Cloud, create a `packages.txt` file in your repo with:
+st.markdown("Note: \n- This app requires MoviePy, Groq, and FFmpeg installed. Install via `pip install moviepy groq`.\n- For Streamlit Cloud, create a `packages.txt` file in your repo with:\n```\nimagemagick\nfonts-dejavu\n```\n- This ensures ImageMagick is installed for text rendering and fonts are available.\n- Coordinates are in pixels, with (0,0) at top-left. Use 'center' for automatic centering on that axis.")
