@@ -17,7 +17,7 @@ GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # Design settings
 CANVAS_WIDTH = 1080
-CANVAS_HEIGHT = 1350  # Better for social media
+CANVAS_HEIGHT = 1350
 HORIZONTAL_MARGIN = 100
 EFFECTIVE_WIDTH = CANVAS_WIDTH - (2 * HORIZONTAL_MARGIN)
 TOP_PADDING = 200
