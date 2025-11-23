@@ -27,7 +27,7 @@ def get_font(size, bold=False):
 
 def generate_ai_copy(product_image, groq_api_key, price_hint=""):
     """Generate marketing copy using Groq AI"""
-    client = groq.Client(api_key=groq_api_key)
+    client = groq.Client(api_key=groq_key)
     
     prompt = f"""
     Create compelling TikTok ad copy for SM Interiors furniture store in Kenya.
