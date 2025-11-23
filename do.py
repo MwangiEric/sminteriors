@@ -46,7 +46,7 @@ def generate_diy_tips(num_tips=5):
     return tips
 
 # Function to generate typewriter animation clip for a given text
-def create_typewriter_clip(text, duration=5, fps=30, font='Courier', fontsize=40, color='gold', bg_color='black', width=1080, height=1920):
+def create_typewriter_clip(text, duration=5, fps=30, font='Courier', fontsize=40, color='gold', bg_color='black', width=1080, height=1920, position=('center', 'center')):
     # Wrap text to fit within the width
     wrapped_text = textwrap.wrap(text, width=30)  # Adjust width as needed
     full_text = '\n'.join(wrapped_text)
@@ -65,18 +65,65 @@ def create_typewriter_clip(text, duration=5, fps=30, font='Courier', fontsize=40
         
         # Create text clip for current text
         txt_clip = TextClip(current_text, fontsize=fontsize, color=color, font=font, bg_color=bg_color)
-        txt_w, txt_h = txt_clip.size
         
-        # Position text in the center
-        txt_clip = txt_clip.set_position(('center', 'center'))
+        # Position text
+        txt_clip = txt_clip.set_position(position)
         
-        # Composite on background - but since bg_color is set, might not need, but for safety
+        # Get frame
         return txt_clip.get_frame(0)
     
     clip = VideoClip(make_frame, duration=duration)
     return clip
 
 st.title("SM Interiors DIY Tips Video Generator")
+
+# Photoshop-like layout controls: User inputs for coordinates and styles
+st.subheader("Customize Layout (Photoshop-like Coordinates)")
+width = 1080
+height = 1920
+
+# Header position
+header_x = st.number_input("Header X Position (0 to 1080, or 'center')", value="center")
+header_y = st.number_input("Header Y Position (0 to 1920)", min_value=0, max_value=height, value=100)
+if header_x != "center":
+    header_x = int(header_x)
+header_position = (header_x, header_y)
+
+# Tip position
+tip_x = st.number_input("Tip X Position (0 to 1080, or 'center')", value="center")
+tip_y = st.number_input("Tip Y Position (0 to 1920)", min_value=0, max_value=height, value="center")
+if tip_x != "center":
+    tip_x = int(tip_x)
+if tip_y != "center":
+    tip_y = int(tip_y)
+tip_position = (tip_x, tip_y)
+
+# Footer position
+footer_x = st.number_input("Footer X Position (0 to 1080, or 'center')", value="center")
+footer_y = st.number_input("Footer Y Position (0 to 1920)", min_value=0, max_value=height, value=height - 200)
+if footer_x != "center":
+    footer_x = int(footer_x)
+footer_position = (footer_x, footer_y)
+
+# SM Interiors footer position
+sm_x = st.number_input("SM Interiors X Position (0 to 1080, or 'center')", value="center")
+sm_y = st.number_input("SM Interiors Y Position (0 to 1920)", min_value=0, max_value=height, value=height - 100)
+if sm_x != "center":
+    sm_x = int(sm_x)
+sm_position = (sm_x, sm_y)
+
+# Other customizations
+header_fontsize = st.number_input("Header Font Size", min_value=10, max_value=100, value=30)
+tip_fontsize = st.number_input("Tip Font Size", min_value=10, max_value=100, value=40)
+footer_fontsize = st.number_input("Footer Font Size", min_value=10, max_value=100, value=25)
+sm_fontsize = st.number_input("SM Interiors Font Size", min_value=10, max_value=100, value=20)
+
+font = st.text_input("Font", value="Courier")
+header_color = st.color_picker("Header Color", value="#FFD700")  # Gold
+tip_color = st.color_picker("Tip Color", value="#FFD700")
+footer_color = st.color_picker("Footer Color", value="#808080")  # Gray
+sm_color = st.color_picker("SM Interiors Color", value="#FFD700")
+bg_color = st.color_picker("Background Color", value="#000000")
 
 # Generate tips using AI
 diy_tips = generate_diy_tips(5)
@@ -86,8 +133,8 @@ if st.button("Generate TikTok Video"):
     clips = []
     
     # Add title clip
-    title_clip = TextClip("Text Typewriter", fontsize=60, color='gold', font='Courier', bg_color='black').set_position('center').set_duration(2)
-    title_clip = title_clip.on_color(size=(1080, 1920), color=(0,0,0), pos=('center', 'center'))
+    title_clip = TextClip("Text Typewriter", fontsize=60, color=tip_color, font=font, bg_color=bg_color).set_position('center').set_duration(2)
+    title_clip = title_clip.on_color(size=(width, height), color=(0,0,0), pos=('center', 'center'))
     clips.append(title_clip)
     
     for tip in diy_tips:
@@ -95,17 +142,17 @@ if st.button("Generate TikTok Video"):
         section_duration = 7
         
         # Background clip
-        bg_clip = ColorClip(size=(1080, 1920), color=(0,0,0)).set_duration(section_duration)
+        bg_clip = ColorClip(size=(width, height), color=(0,0,0)).set_duration(section_duration)
         
         # Header clip (static, full duration)
-        header_clip = TextClip(tip["header"], fontsize=30, color='gold', font='Courier').set_position(('center', 100)).set_duration(section_duration)
+        header_clip = TextClip(tip["header"], fontsize=header_fontsize, color=header_color, font=font).set_position(header_position).set_duration(section_duration)
         
         # Typewriter tip clip (starts after 1 second, duration 5)
-        tip_clip = create_typewriter_clip(tip["tip"], duration=5).set_start(1)
+        tip_clip = create_typewriter_clip(tip["tip"], duration=5, fps=30, font=font, fontsize=tip_fontsize, color=tip_color, bg_color=bg_color, width=width, height=height, position=tip_position).set_start(1)
         
         # Footer clip (static, appears after 6 seconds)
-        footer_clip = TextClip(tip["footer"], fontsize=25, color='gray', font='Courier').set_position(('center', 1920 - 200)).set_duration(1).set_start(6)
-        footer2_clip = TextClip("SM Interiors", fontsize=20, color='gold', font='Courier').set_position(('center', 1920 - 100)).set_duration(1).set_start(6)
+        footer_clip = TextClip(tip["footer"], fontsize=footer_fontsize, color=footer_color, font=font).set_position(footer_position).set_duration(1).set_start(6)
+        sm_clip = TextClip("SM Interiors", fontsize=sm_fontsize, color=sm_color, font=font).set_position(sm_position).set_duration(1).set_start(6)
         
         # Combine for this tip
         combined_tip = CompositeVideoClip([
@@ -113,7 +160,7 @@ if st.button("Generate TikTok Video"):
             header_clip,
             tip_clip,
             footer_clip,
-            footer2_clip
+            sm_clip
         ])
         
         clips.append(combined_tip)
