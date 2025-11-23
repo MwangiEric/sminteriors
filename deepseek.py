@@ -11,7 +11,7 @@ from rembg import remove
 # --- CONFIGURATION ---
 GROQ_API_KEY = st.secrets.get('groq_key')
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "mixtral-8x7b-instruct-v0.1"
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # Design settings
 CANVAS_WIDTH = 1080
