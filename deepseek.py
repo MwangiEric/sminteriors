@@ -1,16 +1,15 @@
-# app.py (Pillow 10 + Pyodide compatible - PORTRAIT + ANIMATED BACKGROUND)
+# app.py (OPTIMIZED - Smart Typing Layout + Animated BG)
 import streamlit as st
 import numpy as np
 import imageio
 import tempfile
-import shutil
 import base64
 import math
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import os
 
-st.set_page_config(page_title="Typing → MP4", layout="centered")
+st.set_page_config(page_title="Smart Typing → MP4", layout="centered")
 
 st.markdown(
     """
@@ -39,173 +38,210 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ------------- Improved font handling -------------
-def get_font(size=120):
-    """Get a font that works across platforms including Pyodide"""
-    font = None
+# ------------- Smart Text Layout System -------------
+class SmartTextLayout:
+    def __init__(self, width, height, margins=100):
+        self.width = width
+        self.height = height
+        self.margins = margins
+        self.content_width = width - 2 * margins
+        self.content_height = height - 2 * margins
+        
+    def calculate_font_size(self, text, max_font=80, min_font=24):
+        """Calculate optimal font size based on text length and available space"""
+        avg_chars_per_line = max(10, self.content_width // 30)  # Estimate based on width
+        estimated_lines = max(1, len(text) // avg_chars_per_line)
+        
+        # Calculate max font size that fits vertically
+        max_possible_font = min(max_font, self.content_height // max(estimated_lines, 1))
+        font_size = max(min_font, max_possible_font - len(text) // 20)
+        
+        return font_size
     
-    # Try different font options
-    font_options = [
-        "Arial.ttf", 
-        "arial.ttf",
-        "DejaVuSans.ttf",
-        "LiberationSans-Regular.ttf",
-        "FreeSans.ttf"
-    ]
+    def break_text_into_lines(self, text, font):
+        """Break text into lines that fit within content width"""
+        words = text.split(' ')
+        lines = []
+        current_line = []
+        
+        draw = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+        
+        for word in words:
+            current_line.append(word)
+            test_line = ' '.join(current_line)
+            
+            try:
+                bbox = draw.textbbox((0, 0), test_line, font=font)
+                line_width = bbox[2] - bbox[0]
+            except:
+                line_width = len(test_line) * font.size // 2
+            
+            if line_width > self.content_width:
+                # Remove the last word and start new line
+                current_line.pop()
+                if current_line:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+                else:
+                    # Single word is too long, force break
+                    lines.append(word[:20] + '...')
+                    current_line = []
+        
+        if current_line:
+            lines.append(' '.join(current_line))
+            
+        return lines
     
-    for font_name in font_options:
-        try:
-            font = ImageFont.truetype(font_name, size)
-            break
-        except (OSError, AttributeError):
-            continue
-    
-    # Final fallback to default font
-    if font is None:
-        try:
-            font = ImageFont.load_default()
-        except:
-            font = ImageFont.load_default()
-    
-    return font
+    def calculate_start_position(self, lines, font, line_height):
+        """Calculate starting Y position to center text block vertically"""
+        total_text_height = len(lines) * line_height
+        start_y = self.margins + (self.content_height - total_text_height) // 2
+        return max(self.margins, start_y)
 
-# ------------- Animated Brown/Gold Background -------------
-def create_animated_brown_gold_background(W=1080, H=1920, frame_index=0, total_frames=180):
-    """Create animated brown and gold background that changes over time"""
-    # Base colors for brown and gold palette
-    dark_brown = (101, 67, 33)      # Deep brown
-    medium_brown = (139, 90, 43)    # Medium brown
-    light_brown = (181, 136, 83)    # Light brown
-    dark_gold = (205, 164, 52)      # Dark gold
-    medium_gold = (218, 179, 70)    # Medium gold
-    light_gold = (230, 194, 100)    # Light gold
+# ------------- Optimized Background Animation -------------
+def create_animated_gold_brown_bg(width, height, time_progress):
+    """Create animated brown/gold background using vectorized operations"""
+    # Create coordinate grids
+    y, x = np.ogrid[0:height, 0:width]
     
-    # Create gradient background with animation
-    background = np.zeros((H, W, 3), dtype=np.uint8)
+    # Normalize coordinates
+    y_norm = y / height
+    x_norm = x / width
     
-    # Animated parameters
-    time_progress = frame_index / total_frames
-    wave1 = math.sin(time_progress * 2 * math.pi) * 0.5 + 0.5  # 0 to 1
-    wave2 = math.sin(time_progress * 4 * math.pi + 1) * 0.5 + 0.5
-    wave3 = math.cos(time_progress * 3 * math.pi) * 0.5 + 0.5
+    # Time-based animation parameters
+    t = time_progress * 2 * math.pi
     
-    for y in range(H):
-        # Vertical gradient mixed with waves
-        vertical_progress = y / H
-        
-        # Create animated wave patterns
-        wave_offset1 = math.sin(vertical_progress * 8 * math.pi + time_progress * 6 * math.pi) * 20
-        wave_offset2 = math.cos(vertical_progress * 6 * math.pi + time_progress * 4 * math.pi) * 15
-        
-        # Dynamic color mixing based on animation
-        if vertical_progress < 0.3:
-            # Bottom section - more brown
-            mix = vertical_progress / 0.3
-            r = int(dark_brown[0] * (1 - mix) + medium_brown[0] * mix)
-            g = int(dark_brown[1] * (1 - mix) + medium_brown[1] * mix)
-            b = int(dark_brown[2] * (1 - mix) + medium_brown[2] * mix)
-        elif vertical_progress < 0.7:
-            # Middle section - brown to gold transition
-            mix = (vertical_progress - 0.3) / 0.4
-            r = int(medium_brown[0] * (1 - mix) + dark_gold[0] * mix)
-            g = int(medium_brown[1] * (1 - mix) + dark_gold[1] * mix)
-            b = int(medium_brown[2] * (1 - mix) + dark_gold[2] * mix)
-        else:
-            # Top section - more gold
-            mix = (vertical_progress - 0.7) / 0.3
-            r = int(dark_gold[0] * (1 - mix) + light_gold[0] * mix)
-            g = int(dark_gold[1] * (1 - mix) + light_gold[1] * mix)
-            b = int(dark_gold[2] * (1 - mix) + light_gold[2] * mix)
-        
-        # Add wave animation effects
-        wave_effect = int((wave_offset1 + wave_offset2) * wave1)
-        r = max(0, min(255, r + wave_effect))
-        g = max(0, min(255, g + wave_effect // 2))
-        b = max(0, min(255, b - wave_effect // 3))
-        
-        # Add sparkling gold effect
-        if wave2 > 0.7 and (y + frame_index) % 20 < 2:
-            sparkle_intensity = int(wave2 * 50)
-            r = min(255, r + sparkle_intensity)
-            g = min(255, g + sparkle_intensity)
-            b = min(255, b)
-        
-        # Apply horizontal gradient with animation
-        for x in range(W):
-            horizontal_progress = x / W
-            horizontal_wave = math.sin(horizontal_progress * 4 * math.pi + time_progress * 2 * math.pi) * 10
-            
-            final_r = max(0, min(255, r + int(horizontal_wave * wave3)))
-            final_g = max(0, min(255, g + int(horizontal_wave * wave3 * 0.7)))
-            final_b = max(0, min(255, b + int(horizontal_wave * wave3 * 0.3)))
-            
-            background[y, x] = [final_r, final_g, final_b]
+    # Brown to gold gradient (vectorized)
+    # Base gradient from dark brown to light gold
+    base_r = (101 * (1 - y_norm) + 218 * y_norm).astype(np.uint8)
+    base_g = (67 * (1 - y_norm) + 165 * y_norm).astype(np.uint8)
+    base_b = (33 * (1 - y_norm) + 32 * y_norm).astype(np.uint8)
+    
+    # Animated wave patterns
+    wave1 = np.sin(x_norm * 6 * math.pi + t) * 20
+    wave2 = np.cos(y_norm * 4 * math.pi + t * 1.5) * 15
+    wave3 = np.sin(x_norm * 3 * math.pi + y_norm * 5 * math.pi + t * 0.7) * 10
+    
+    # Combine waves
+    combined_wave = wave1 + wave2 + wave3
+    
+    # Apply waves to create animated texture
+    r = np.clip(base_r + combined_wave * 0.8, 0, 255)
+    g = np.clip(base_g + combined_wave * 0.6, 0, 255)
+    b = np.clip(base_b + combined_wave * 0.3, 0, 255)
+    
+    # Create final background
+    background = np.stack([r, g, b], axis=-1)
+    
+    # Add occasional gold sparkles
+    sparkle_mask = (np.sin(x * y * 0.0001 + t * 5) > 0.98) & (y_norm > 0.2) & (y_norm < 0.8)
+    background[sparkle_mask] = [255, 223, 0]
     
     return background
 
-# ------------- Frame Generation -------------
-def create_frame(text, frame_index, total_frames, W=1080, H=1920):
-    """Create a single frame with animated background and text overlay"""
-    # Create animated background
-    background = create_animated_brown_gold_background(W, H, frame_index, total_frames)
+# ------------- Smart Frame Generation -------------
+def create_smart_typing_frame(full_text, chars_visible, frame_index, total_frames, width=1080, height=1920):
+    """Create frame with smart text layout and animated background"""
+    # Calculate time progress for background animation
+    time_progress = frame_index / total_frames
     
-    # Convert background to PIL Image
-    img = Image.fromarray(background)
+    # Create animated background
+    bg = create_animated_gold_brown_bg(width, height, time_progress)
+    img = Image.fromarray(bg)
     draw = ImageDraw.Draw(img)
     
-    # Adjust font size for portrait orientation
-    font_size = min(80, max(40, 80 - max(0, len(text) - 30) * 2))  # Dynamic font sizing
-    font = get_font(font_size)
+    # Initialize layout system
+    layout = SmartTextLayout(width, height)
     
+    # Calculate optimal font size
+    font_size = layout.calculate_font_size(full_text)
     try:
-        # Modern Pillow textbbox method
-        bbox = draw.textbbox((0, 0), text, font=font)
-        left, top, right, bottom = bbox
-        tw, th = right - left, bottom - top
-        x, y = (W - tw) // 2 - left, (H - th) // 2 - top
-    except AttributeError:
-        # Fallback for older Pillow versions
+        font = ImageFont.truetype("Arial.ttf", font_size)
+    except:
         try:
-            tw, th = draw.textsize(text, font=font)
-            x, y = (W - tw) // 2, (H - th) // 2
+            font = ImageFont.truetype("arial.ttf", font_size)
         except:
-            # Ultimate fallback
-            tw, th = 100, 100
-            x, y = (W - tw) // 2, (H - th) // 2
+            font = ImageFont.load_default()
     
-    # Draw text with elegant styling
-    shadow_color = (60, 40, 20)  # Dark brown shadow
+    # Get visible portion of text
+    visible_text = full_text[:chars_visible]
+    
+    # Break text into lines
+    lines = layout.break_text_into_lines(visible_text, font)
+    
+    # Calculate line height
+    try:
+        bbox = draw.textbbox((0, 0), "Test", font=font)
+        line_height = (bbox[3] - bbox[1]) * 1.4
+    except:
+        line_height = font_size * 1.4
+    
+    # Calculate starting position
+    start_y = layout.calculate_start_position(lines, font, line_height)
+    
+    # Draw each line with animation effects
+    shadow_color = (70, 45, 20)  # Dark brown shadow
     text_color = (255, 215, 0)   # Gold text
     
-    # Text shadow (multiple offsets for depth)
-    for dx, dy in [(3, 3), (2, 2), (1, 1)]:
-        draw.text((x+dx, y+dy), text, font=font, fill=shadow_color)
-    
-    # Main text
-    draw.text((x, y), text, font=font, fill=text_color)
-    
-    # Add subtle glow effect
-    glow_color = (255, 230, 150, 100)  # Light gold with transparency
-    for glow_size in [2, 1]:
+    for i, line in enumerate(lines):
+        y_pos = start_y + i * line_height
+        
+        # Calculate line width for centering
         try:
-            glow_font = get_font(font_size + glow_size)
-            bbox_glow = draw.textbbox((0, 0), text, font=glow_font)
-            left_g, top_g, right_g, bottom_g = bbox_glow
-            tw_g, th_g = right_g - left_g, bottom_g - top_g
-            x_g, y_g = (W - tw_g) // 2 - left_g, (H - th_g) // 2 - top_g
-            # Create a temporary image for glow effect
-            glow_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            glow_draw = ImageDraw.Draw(glow_img)
-            glow_draw.text((x_g, y_g), text, font=glow_font, fill=glow_color)
-            # Composite the glow
-            img = Image.alpha_composite(img.convert("RGBA"), glow_img).convert("RGB")
+            bbox = draw.textbbox((0, 0), line, font=font)
+            line_width = bbox[2] - bbox[0]
         except:
-            pass
+            line_width = len(line) * font_size // 2
+        
+        x_pos = (width - line_width) // 2
+        
+        # Draw text shadow for depth
+        draw.text((x_pos + 2, y_pos + 2), line, font=font, fill=shadow_color)
+        
+        # Draw main text
+        draw.text((x_pos, y_pos), line, font=font, fill=text_color)
     
     return np.array(img)
 
+# ------------- Fast Video Generation -------------
+def generate_smart_typing_video(sentence, duration, width, height, output_path):
+    """Generate video with smart typing layout"""
+    fps = 30
+    total_frames = duration * fps
+    total_chars = len(sentence)
+    chars_per_frame = total_chars / total_frames
+    
+    # Pre-calculate layout once
+    layout = SmartTextLayout(width, height)
+    font_size = layout.calculate_font_size(sentence)
+    
+    with imageio.get_writer(
+        output_path, 
+        fps=fps, 
+        codec="libx264",
+        quality=8,
+        pixelformat="yuv420p"
+    ) as writer:
+        
+        for frame_idx in range(total_frames):
+            # Calculate characters to show
+            chars_to_show = min(int(chars_per_frame * (frame_idx + 1)), total_chars)
+            
+            # Create frame
+            frame = create_smart_typing_frame(
+                sentence, chars_to_show, frame_idx, total_frames, width, height
+            )
+            
+            writer.append_data(frame)
+            
+            # Yield progress
+            if frame_idx % 10 == 0:
+                yield frame_idx / total_frames
+    
+    yield 1.0  # Complete
+
 def get_video_html(video_path):
-    """Convert video file to HTML video element with base64 encoding"""
+    """Convert video file to HTML video element"""
     try:
         with open(video_path, "rb") as video_file:
             video_bytes = video_file.read()
@@ -225,110 +261,80 @@ def get_video_html(video_path):
 # ------------- Main UI -------------
 with st.container():
     st.markdown('<div class="glass">', unsafe_allow_html=True)
-    st.markdown("<h2 style='text-align:center;color:#ffffff'>✨ Portrait Typing Animation → MP4 ✨</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align:center;color:#ffffff'>✨ Smart Typing Animation ✨</h2>", unsafe_allow_html=True)
 
-    sentence = st.text_input(
-        "", 
-        "Hello! This beautiful text animates with golden elegance.", 
-        placeholder="Type your own sentence…",
-        max_chars=150  # Slightly reduced for portrait mode
-    )
-    
-    # Configuration options
+    # Configuration
     col1, col2 = st.columns(2)
     with col1:
-        duration = st.slider("Duration (seconds)", 2, 10, 6)
+        duration = st.slider("Duration (seconds)", 2, 6, 4)
     with col2:
-        resolution = st.selectbox("Resolution", ["1080x1920 Portrait", "720x1280 Portrait", "540x960 Portrait"], index=0)
+        resolution = st.selectbox("Resolution", ["720x1280", "1080x1920"], index=1)
 
     resolution_map = {
-        "540x960 Portrait": (540, 960),
-        "720x1280 Portrait": (720, 1280), 
-        "1080x1920 Portrait": (1080, 1920)
+        "720x1280": (720, 1280), 
+        "1080x1920": (1080, 1920)
     }
     W, H = resolution_map[resolution]
 
-    if st.button("✨ Generate MP4", type="primary"):
-        if not sentence:
+    sentence = st.text_area(
+        "Text to animate:", 
+        "Welcome to this beautiful typing animation with smart text layout and golden brown background effects!",
+        height=80,
+        max_chars=300,
+        placeholder="Enter your text here... (up to 300 characters)"
+    )
+
+    if st.button("🚀 Generate Smart Animation", type="primary"):
+        if not sentence.strip():
             st.warning("Please enter some text.")
             st.stop()
 
-        with st.spinner("Creating your golden typing animation..."):
-            fps = 30
-            total_frames = duration * fps
-            chars_per_frame = len(sentence) / total_frames
+        if len(sentence) > 300:
+            st.warning("Text too long! Please limit to 300 characters.")
+            st.stop()
 
-            # Create temporary directory
+        with st.spinner("Creating smart typing animation..."):
+            import tempfile
             tmpdir = Path(tempfile.mkdtemp())
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-
+            out_mp4 = tmpdir / "smart_typing.mp4"
+            
             try:
-                # Generate frames
-                frames_dir = tmpdir / "frames"
-                frames_dir.mkdir()
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                status_text.text("Creating animated golden frames...")
-                for frm in range(total_frames):
-                    n = min(int(round(chars_per_frame * (frm + 1))), len(sentence))
-                    
-                    # Create frame with animated background
-                    frame_array = create_frame(sentence[:n], frm, total_frames, W, H)
-                    
-                    # Save frame
-                    imageio.imwrite(frames_dir / f"{frm:05d}.png", frame_array)
-                    
-                    # Update progress
-                    if frm % 10 == 0:
-                        progress_bar.progress(frm / total_frames)
-                        status_text.text(f"Creating animated golden frames... {int(frm/total_frames*100)}%")
-
-                progress_bar.progress(1.0)
-                status_text.text("Creating MP4 video...")
-
-                # Create MP4
-                out_mp4 = tmpdir / "typing_portrait.mp4"
+                # Generate video
+                status_text.text("🔄 Calculating optimal text layout...")
                 
-                # Use imageio with safe parameters
-                with imageio.get_writer(
-                    out_mp4, 
-                    fps=fps, 
-                    codec="libx264",
-                    quality=8,
-                    pixelformat="yuv420p"
-                ) as writer:
-                    for frm in range(total_frames):
-                        frame_path = frames_dir / f"{frm:05d}.png"
-                        frame_data = imageio.imread(frame_path)
-                        writer.append_data(frame_data)
-                        
-                        # Clean up frame file immediately to save memory
-                        if frm % 5 == 0:
-                            frame_path.unlink(missing_ok=True)
-
-                status_text.text("Finalizing...")
+                for progress in generate_smart_typing_video(sentence, duration, W, H, out_mp4):
+                    progress_bar.progress(progress)
+                    if progress < 1.0:
+                        status_text.text(f"🎬 Generating frames... {int(progress * 100)}%")
+                    else:
+                        status_text.text("✅ Finalizing video...")
                 
-                # Store video path in session state for display
+                # Store results
                 st.session_state.generated_video_path = out_mp4
                 st.session_state.show_video = True
+                st.session_state.video_tmpdir = tmpdir
                 
-                # Success message
-                st.success(f"✅ Success! Created {duration}-second portrait animation with golden brown background!")
+                st.success(f"✨ Done! Generated {duration}-second smart typing animation")
 
             except Exception as e:
-                st.error(f"❌ Error creating animation: {str(e)}")
-                st.info("💡 Tip: Try shorter text or lower resolution if you're experiencing issues.")
-                st.session_state.show_video = False
-            finally:
-                progress_bar.empty()
-                status_text.empty()
+                st.error(f"❌ Error: {str(e)}")
+                import shutil
+                try:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                except:
+                    pass
 
-    # Display the generated video if available
+    # Display video if available
     if hasattr(st.session_state, 'show_video') and st.session_state.show_video:
-        if hasattr(st.session_state, 'generated_video_path') and st.session_state.generated_video_path.exists():
-            st.markdown("### 🎥 Your Golden Portrait Animation")
+        if (hasattr(st.session_state, 'generated_video_path') and 
+            st.session_state.generated_video_path.exists()):
             
-            # Display video using HTML for better control
+            st.markdown("### 🎥 Your Smart Typing Animation")
+            
+            # Display video
             video_html = get_video_html(st.session_state.generated_video_path)
             st.markdown(video_html, unsafe_allow_html=True)
             
@@ -337,38 +343,38 @@ with st.container():
                 st.download_button(
                     label="⬇️ Download MP4", 
                     data=f, 
-                    file_name="golden_typing_portrait.mp4", 
+                    file_name="smart_typing_animation.mp4", 
                     mime="video/mp4",
                     type="primary"
                 )
-            
-            st.markdown("---")
-            
-            # Cleanup previous video when generating new one
-            if 'previous_video_path' in st.session_state and st.session_state.previous_video_path != st.session_state.generated_video_path:
-                try:
-                    if st.session_state.previous_video_path.exists():
-                        st.session_state.previous_video_path.unlink()
-                except:
-                    pass
-            
-            st.session_state.previous_video_path = st.session_state.generated_video_path
 
-    # Add information about the animation
-    with st.expander("ℹ️ About this Animation"):
+    # Features explanation
+    with st.expander("🧠 Smart Features"):
         st.markdown("""
-        **Features:**
-        - 🎨 **Animated Brown & Gold Background**: Smooth color transitions with wave effects
-        - 📱 **Portrait Orientation**: Perfect for mobile viewing (1080x1920)
-        - ✨ **Golden Text**: Elegant typography with glow effects
-        - 🌊 **Dynamic Animation**: Background evolves throughout the video
-        - 🎬 **Professional Quality**: 30 FPS smooth animation
+        **Intelligent Text Layout:**
+        - 📐 **Automatic Font Sizing**: Font size adjusts based on text length
+        - 📝 **Smart Line Breaking**: Text automatically wraps to fit screen width
+        - 🎯 **Vertical Centering**: Text block is perfectly centered vertically
+        - 📏 **Dynamic Margins**: Optimal spacing calculated automatically
         
-        **Perfect for:**
-        - Social media stories
-        - Mobile content
-        - Professional presentations
-        - Creative projects
+        **Beautiful Animations:**
+        - 🎨 **Animated Brown/Gold Background**: Smooth color transitions with wave effects
+        - ✨ **Gold Sparkles**: Subtle sparkling effects throughout
+        - 🌊 **Multi-layer Waves**: Complex wave patterns for rich texture
+        - 💫 **Time-based Evolution**: Background changes throughout animation
+        
+        **Performance Optimized:**
+        - ⚡ **Vectorized Operations**: Fast NumPy-based background generation
+        - 🎞️ **Direct Frame Streaming**: No intermediate file storage
+        - 🔄 **Progressive Rendering**: Real-time progress updates
         """)
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+# Cleanup
+if hasattr(st.session_state, 'video_tmpdir') and not hasattr(st.session_state, 'show_video'):
+    import shutil
+    try:
+        shutil.rmtree(st.session_state.video_tmpdir, ignore_errors=True)
+    except:
+        pass
