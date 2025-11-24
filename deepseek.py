@@ -54,7 +54,7 @@ class AdvancedBackgroundGenerator:
             "Golden Elegance": self.golden_elegance,
             "Deep Amber": self.deep_amber,
             "Vintage Sepia": self.vintage_sepia,
-            "Royal Bronze": self.royal_bronze,
+           
             "Sunset Gold": self.sunset_gold,
         }
     
