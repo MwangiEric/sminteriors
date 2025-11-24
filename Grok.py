@@ -158,7 +158,7 @@ for name in ["hook", "price", "cta"]:
 
 
 # --- Display the Final Image Preview ---
-st.image(bg.resize((540,960)), caption="Live 1080x1920 Output (Preview Scaled to 540x960)", use_column_width=True)
+st.image(bg.resize((1080,1920)), caption="Live 1080x1920 Output (Preview Scaled to 540x960)", use_column_width=True)
 
 
 # --- Drag logic (from canvas clicks/transforms) ---
