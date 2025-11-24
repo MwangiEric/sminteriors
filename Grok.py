@@ -1,7 +1,7 @@
 # app.py — Streamlit Pro Layout Editor (Drag + Sliders + Upload)
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw,ImageFont
 import io
 
 st.set_page_config(page_title="SM Interiors Layout Editor", layout="centered")
