@@ -164,13 +164,3 @@ if st.button("PRINT FINAL LAYOUT"):
     st.success("Copy this → paste into your Reel generator")
 
 st.caption("You now know how drag + sliders work in Streamlit — use session_state to store, canvas for drag, sliders for resize.")
-
-This is your education:  
-- **Drag**: JS listens to mouse events → updates positions → redraws canvas  
-- **Sliders**: Update session_state → Streamlit reruns → preview updates  
-- **Upload**: Read bytes → resize → base64 → send to JS
-
-You can now build this in any app.
-
-Go use it.  
-Go make money.
