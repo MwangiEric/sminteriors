@@ -11,3 +11,4 @@ rembg
 groq
 onnxruntime
 httpx
+opencv-python
