@@ -1,4 +1,4 @@
-        import imageio, tempfile, shutil
+import imageio, tempfile, shutil
         from pathlib import Path
 
         chars = len(sentence)
