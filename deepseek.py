@@ -1,4 +1,4 @@
-# app.py (PRODUCTION-READY WITH ALL FIXES)
+# app.py (FIXED - Session State & Widget Conflict Resolved)
 import streamlit as st
 import numpy as np
 import imageio
@@ -36,6 +36,36 @@ class SecurityConfig:
     TEXT_START_Y = 120
     SHADOW_BLUR = 3
     MARGINS = 80
+
+# ============ SESSION STATE MANAGEMENT ============
+def initialize_session_state():
+    """Initialize all session state variables safely"""
+    default_state = {
+        'text_history': [],
+        'generating': False,
+        'current_text': 'CREATE AMAZING CONTENT WITH PROFESSIONAL ANIMATIONS!',
+        'ai_content': None,
+        'generated_video_path': None,
+        'show_video': False,
+        'video_tmpdir': None
+    }
+    
+    for key, value in default_state.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+# ============ CONFIGURATION MANAGER ============
+class ConfigManager:
+    """Manage configuration without conflicting with widget state"""
+    @staticmethod
+    def get_style_config():
+        """Get current style configuration from widgets"""
+        # These will be read from widgets in the UI, not stored in session state
+        return {
+            'background_theme': 'golden_elegance',  # Will be set by widget
+            'text_color': '#FFD700',  # Will be set by widget
+            'shadow_color': '#8B4513'  # Will be set by widget
+        }
 
 # ============ SECURITY & ERROR HANDLING ============
 class SecurityManager:
@@ -593,7 +623,7 @@ class SecureGroqGenerator:
         
         payload = {
             "messages": [{"role": "user", "content": prompts.get(content_type, prompts["tips"])}],
-            "model": "llama-3.1-8b-ininstant",
+            "model": "llama-3.1-8b-instant",
             "max_tokens": 300,
             "temperature": 0.7
         }
@@ -639,28 +669,21 @@ def setup_ui():
     </style>
     """, unsafe_allow_html=True)
 
-def create_preview_section():
+def create_preview_section(current_text, style_config):
     """Create instant preview functionality"""
     if st.button("👀 Preview Layout", key="preview"):
-        if 'current_text' in st.session_state and st.session_state.current_text:
+        if current_text:
             with st.spinner("Generating preview..."):
                 try:
-                    # Generate single frame for preview
-                    preview_config = {
-                        'text_color': st.session_state.get('text_color', '#FFD700'),
-                        'shadow_color': st.session_state.get('shadow_color', '#8B4513'),
-                        'background_theme': st.session_state.get('background_theme', 'golden_elegance')
-                    }
-                    
                     frame_gen = ProductionFrameGenerator(GROQ_API_KEY if GROQ_API_KEY else None)
-                    W, H = (1080, 1920)  # Preview at full resolution but scaled down
+                    W, H = (1080, 1920)
                     preview_frame = frame_gen.create_production_frame(
-                        st.session_state.current_text, 1.0, 0, 1, W, H, preview_config
+                        current_text, 1.0, 0, 1, W, H, style_config
                     )
                     
                     # Convert to PIL and resize for display
                     preview_img = Image.fromarray(preview_frame)
-                    display_size = (400, 711)  # Maintain aspect ratio
+                    display_size = (400, 711)
                     preview_img.thumbnail(display_size, Image.Resampling.LANCZOS)
                     
                     st.image(preview_img, caption="Layout Preview", use_column_width=True)
@@ -671,14 +694,11 @@ def create_preview_section():
 
 # ============ MAIN APPLICATION ============
 def main():
+    # Initialize session state first
+    initialize_session_state()
+    
     # Setup UI
     setup_ui()
-    
-    # Initialize session state
-    if 'text_history' not in st.session_state:
-        st.session_state.text_history = []
-    if 'generating' not in st.session_state:
-        st.session_state.generating = False
     
     # Header with logo
     st.markdown('<div class="glass">', unsafe_allow_html=True)
@@ -697,7 +717,7 @@ def main():
             topic = st.text_input("Topic:", placeholder="e.g., home organization, gardening", key="ai_topic")
             content_type = st.selectbox("Content Type:", ["tips", "hashtags", "captions"], key="content_type")
             
-            if st.button("🛠️ Generate Content", disabled=st.session_state.get('generating', False)):
+            if st.button("🛠️ Generate Content", disabled=st.session_state.generating, key="generate_content_btn"):
                 if topic:
                     with st.spinner("AI is generating content..."):
                         generator = SecureGroqGenerator(GROQ_API_KEY)
@@ -706,33 +726,33 @@ def main():
                         st.session_state.text_history.append(content)
         
         with col2:
-            if 'ai_content' in st.session_state:
+            if st.session_state.ai_content:
                 st.text_area("AI Content:", st.session_state.ai_content, height=120, key="ai_content_display")
-                if st.button("🎬 Use for Animation", key="use_ai"):
+                if st.button("🎬 Use for Animation", key="use_ai_btn"):
                     lines = st.session_state.ai_content.split('\n')
                     usable_text = lines[0] if lines else st.session_state.ai_content[:150]
                     st.session_state.current_text = usable_text
                     st.success("Content ready for animation!")
+                    st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
     
-    # Animation Configuration
+    # Animation Configuration - Use widget values directly, don't store in session state
     with st.expander("🎨 Animation Settings", expanded=True):
         col1, col2, col3 = st.columns(3)
         
         with col1:
+            # Store widget value in a local variable, not session state
             background_theme = st.selectbox(
                 "Background Theme",
                 ["golden_elegance", "deep_amber", "vintage_sepia"],
-                key="background_theme"
+                key="background_theme_select"
             )
-            st.session_state.background_theme = background_theme
             
         with col2:
+            # Store widget values in local variables
             text_color = st.color_picker("Text Color", "#FFD700", key="text_color_picker")
             shadow_color = st.color_picker("Shadow Color", "#8B4513", key="shadow_color_picker")
-            st.session_state.text_color = text_color
-            st.session_state.shadow_color = shadow_color
             
         with col3:
             duration = st.slider("Duration (seconds)", 2, SecurityConfig.MAX_DURATION, 5, key="duration_slider")
@@ -743,64 +763,64 @@ def main():
             if memory_mb > SecurityConfig.MAX_MEMORY_MB * 0.8:
                 memory_warning.warning(f"⚠️ High memory usage: {memory_mb:.0f}MB estimated")
     
+    # Build style config from widget values
+    style_config = {
+        'background_theme': background_theme,
+        'text_color': text_color,
+        'shadow_color': shadow_color
+    }
+    
     # Text Input with Validation
     with st.expander("📝 Animation Text", expanded=True):
-        default_text = "CREATE AMAZING CONTENT WITH PROFESSIONAL ANIMATIONS!"
-        
-        if 'current_text' in st.session_state:
-            default_text = st.session_state.current_text
-        
-        sentence = st.text_area(
+        # Use session state for text, but update it safely
+        current_text = st.text_area(
             "Your Text:",
-            value=default_text,
+            value=st.session_state.current_text,
             height=100,
             max_chars=SecurityConfig.MAX_TEXT_LENGTH,
             key="main_text_input",
             help=f"Maximum {SecurityConfig.MAX_TEXT_LENGTH} characters"
         )
         
+        # Update session state safely - only when text actually changes
+        if current_text != st.session_state.current_text:
+            st.session_state.current_text = current_text
+        
         # Real-time validation
-        if sentence:
-            char_count = len(sentence)
+        if current_text:
+            char_count = len(current_text)
             if char_count > SecurityConfig.MAX_TEXT_LENGTH:
                 st.error(f"Text too long: {char_count}/{SecurityConfig.MAX_TEXT_LENGTH} characters")
             else:
                 st.caption(f"Characters: {char_count}/{SecurityConfig.MAX_TEXT_LENGTH}")
         
-        st.session_state.current_text = sentence
-        
         # Preview and Undo buttons
         col1, col2 = st.columns(2)
         with col1:
-            create_preview_section()
+            create_preview_section(current_text, style_config)
         with col2:
             if st.session_state.text_history and st.button("↶ Undo", key="undo_btn"):
                 st.session_state.current_text = st.session_state.text_history.pop()
                 st.rerun()
     
     # Generate Button with Safety Checks
-    style_config = {
-        'text_color': st.session_state.get('text_color', '#FFD700'),
-        'shadow_color': st.session_state.get('shadow_color', '#8B4513'),
-        'background_theme': st.session_state.get('background_theme', 'golden_elegance')
-    }
-    
     resolution_map = {"720x1280": (720, 1280), "1080x1920": (1080, 1920)}
     W, H = resolution_map[resolution]
     
     if st.button("🚀 Generate Professional Animation", 
                  type="primary", 
-                 disabled=st.session_state.get('generating', False),
-                 use_container_width=True):
+                 disabled=st.session_state.generating,
+                 use_container_width=True,
+                 key="generate_animation_btn"):
         
         # Input validation
-        validation_errors = SecurityManager.validate_inputs(sentence, duration, resolution)
+        validation_errors = SecurityManager.validate_inputs(current_text, duration, resolution)
         if validation_errors:
             for error in validation_errors:
                 st.error(error)
             return
         
-        if not sentence.strip():
+        if not current_text.strip():
             st.error("Please enter some text for the animation")
             return
         
@@ -827,7 +847,7 @@ def main():
                 groq_key = GROQ_API_KEY if GROQ_API_KEY else None
                 
                 for progress, remaining_seconds in generate_video_with_progress(
-                    sentence, duration, W, H, style_config, groq_key, out_mp4
+                    current_text, duration, W, H, style_config, groq_key, out_mp4
                 ):
                     progress_bar.progress(progress)
                     
@@ -854,9 +874,8 @@ def main():
                 st.session_state.generating = False
     
     # Display generated video
-    if hasattr(st.session_state, 'show_video') and st.session_state.show_video:
-        if (hasattr(st.session_state, 'generated_video_path') and 
-            st.session_state.generated_video_path.exists()):
+    if st.session_state.show_video and st.session_state.generated_video_path:
+        if st.session_state.generated_video_path.exists():
             
             st.markdown("### 🎥 Your Professional Animation")
             
@@ -883,17 +902,18 @@ def main():
                         file_name="professional_animation.mp4", 
                         mime="video/mp4",
                         type="primary",
-                        use_container_width=True
+                        use_container_width=True,
+                        key="download_btn"
                     )
                 
             except Exception as e:
                 st.error("Failed to display video")
     
     # Cleanup button
-    if st.session_state.get('show_video', False):
-        if st.button("🗑️ Clear Animation", use_container_width=True):
+    if st.session_state.show_video:
+        if st.button("🗑️ Clear Animation", use_container_width=True, key="clear_btn"):
             import shutil
-            if hasattr(st.session_state, 'video_tmpdir'):
+            if st.session_state.video_tmpdir:
                 try:
                     shutil.rmtree(st.session_state.video_tmpdir, ignore_errors=True)
                 except:
