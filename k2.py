@@ -1,13 +1,15 @@
 # app.py
 import streamlit as st
-import time
-import cv2
 import numpy as np
+import imageio
+import tempfile
+import shutil
 from pathlib import Path
+import time
 
 st.set_page_config(page_title="Typing → MP4", layout="centered")
 
-# --------------------  CSS (animated gradient) --------------------
+# -------------  cool animated gradient background -------------
 st.markdown(
     """
     <style>
@@ -37,21 +39,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --------------------  draw 1 frame --------------------
+# -------------  draw 1 frame (RGB) -------------
 def frame(text_so_far, W=1920, H=1080):
     img = np.zeros((H, W, 3), dtype=np.uint8)
     # vertical gradient
     for i in range(H):
-        img[i, :] = (30 - i // 20, 15 - i // 25, 60 - i // 30)
-    # centred text
+        img[i, :] = (30-i//20, 15-i//25, 60-i//30)
+    # glowing cyan text
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale, thick = 4, 6
+    scale, thick = 4, 8
     (tw, th), _ = cv2.getTextSize(text_so_far, font, scale, thick)
     x, y = (W - tw) // 2, (H + th) // 2
     cv2.putText(img, text_so_far, (x, y), font, scale, (0, 245, 255), thick, cv2.LINE_AA)
-    return img
+    return img[:, :, ::-1]  # BGR → RGB
 
-# --------------------  UI --------------------
+# -------------  UI -------------
 with st.container():
     st.markdown('<div class="glass">', unsafe_allow_html=True)
     st.markdown("<h2 style='text-align:center;color:#ffffff'>✨ Typing animation → MP4 ✨</h2>", unsafe_allow_html=True)
@@ -64,29 +66,31 @@ with st.container():
             st.warning("Please enter some text.")
             st.stop()
 
-        # ----  render video  ----
         fps = 30
         total_frames = 6 * fps
         chars_per_frame = chars / total_frames
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out_path = Path("typing.mp4")
-        writer = cv2.VideoWriter(str(out_path), fourcc, fps, (1920, 1080))
-        if not writer.isOpened():
-            st.error("Cannot open video writer – codec mp4v unavailable.")
-            st.stop()
 
+        tmpdir = Path(tempfile.mkdtemp())
         progress = st.progress(0)
+
+        # -------------  write frames  -------------
         for frm in range(total_frames):
             n = int(round(chars_per_frame * (frm + 1)))
             n = min(n, chars)
-            writer.write(frame(sentence[:n]))
+            imageio.imwrite(tmpdir / f"{frm:05d}.png", frame(sentence[:n]))
             if frm % 10 == 0:
                 progress.progress(frm / total_frames)
-        writer.release()
+
         progress.empty()
 
-        # ----  download button  ----
-        with open(out_path, "rb") as f:
+        # -------------  assemble MP4  -------------
+        out_mp4 = tmpdir / "typing.mp4"
+        with imageio.get_writer(out_mp4, fps=fps, codec="libx264", pix_fmt="yuv420p") as w:
+            for frm in range(total_frames):
+                w.append_data(imageio.imread(tmpdir / f"{frm:05d}.png"))
+
+        # -------------  download button  -------------
+        with open(out_mp4, "rb") as f:
             st.download_button(
                 label="⬇️ Download MP4",
                 data=f,
@@ -94,5 +98,7 @@ with st.container():
                 mime="video/mp4"
             )
         st.success("MP4 ready – right-click → save, or use the button above.")
+
+        shutil.rmtree(tmpdir)
 
     st.markdown("</div>", unsafe_allow_html=True)
