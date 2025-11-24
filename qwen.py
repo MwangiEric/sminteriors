@@ -9,19 +9,19 @@ from groq import Groq
 st.set_page_config(page_title="SM Interiors Reel Tool", layout="wide", page_icon="🎬")
 
 WIDTH, HEIGHT = 1080, 1920
-FPS, DURATION = 30, 12
+FPS, DURATION = 30, 6  # 6 seconds
 
-# Reliable free audio
+# Reliable MP3 audio (no codec issues)
 MUSIC_URLS = {
-    "Gold Luxury": "https://www.soundjay.com/misc/sounds/bell-ringing-05.wav",
-    "Viral Pulse": "https://www.soundjay.com/misc/sounds/notification-10.wav",
-    "Elegant Flow": "https://www.soundjay.com/misc/sounds/notification-3.wav"
+    "Gold Luxury": "https://cdn.pixabay.com/download/audio/2022/03/15/audio_5519b1a5b6.mp3",
+    "Viral Pulse": "https://cdn.pixabay.com/download/audio/2022/06/02/audio_c0b387b3b3.mp3",
+    "Elegant Flow": "https://cdn.pixabay.com/download/audio/2022/03/08/audio_3f3a1f8a7c.mp3",
 }
 
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png"
 
 # Initialize Groq
-GROQ_API_KEY = st.secrets["groq_key"]  # Store in Streamlit Cloud secrets
+GROQ_API_KEY = st.secrets["groq_key"]
 client = Groq(api_key=GROQ_API_KEY)
 
 @st.cache_resource
@@ -42,6 +42,14 @@ def safe_image_load(uploaded):
             tmp_path = tmp_file.name
 
         img = Image.open(tmp_path).convert("RGBA")
+
+        # Auto-resize for Groq (avoid 413 error)
+        max_dim = 1024
+        if max(img.width, img.height) > max_dim:
+            ratio = max_dim / max(img.width, img.height)
+            new_size = (int(img.width * ratio), int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
         img = ImageEnhance.Contrast(img).enhance(1.3)
         img = ImageEnhance.Sharpness(img).enhance(1.8)
         img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
@@ -59,7 +67,6 @@ def safe_image_load(uploaded):
         return None, None
 
 def analyze_image_with_groq(image_bytes):
-    """Send image to Groq for visual analysis"""
     try:
         image_b64 = base64.b64encode(image_bytes).decode('utf-8')
 
@@ -97,13 +104,13 @@ CTA: Order Now • 0710 895 737
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}"
+                                "url": f"image/jpeg;base64,{image_b64}"
                             }
                         }
                     ],
                 }
             ],
-            model="llama-3.1-70b-versatile",
+            model="meta-llama/llama-4-maverick-17b-128e-instruct",  # ✅ Best for object recognition
             temperature=0.7,
             max_tokens=200,
         )
@@ -132,140 +139,116 @@ def parse_groq_response(text):
             data[key.strip()] = value.strip()
     return data
 
-def smart_text_size(draw, text, font, max_width, max_height=None):
-    """Scale font to fit within max_width, max_height"""
-    original_font = font
-    size = font.size
-    while True:
-        bbox = draw.textbbox((0, 0), text, font=font)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-        if w <= max_width and (max_height is None or h <= max_height):
-            break
-        size -= 1
-        if size < 10:
-            break
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
-        except:
-            font = ImageFont.load_default()
-    return font
+# --- TEMPLATES ---
+TEMPLATES = {
+    "Luxury": {
+        "bg_color": "#0F0A05",
+        "ring_color": "#FFD700",
+        "text_color": "#FFFFFF",
+        "price_bg": "#FFD700",
+        "price_text": "#0F0A05",
+        "cta_pulse": True,
+    },
+    "Bold": {
+        "bg_color": "#000000",
+        "ring_color": "#FF4500",
+        "text_color": "#FFFFFF",
+        "price_bg": "#FF4500",
+        "price_text": "#000000",
+        "cta_pulse": True,
+    },
+    "Minimalist": {
+        "bg_color": "#FFFFFF",
+        "ring_color": "#000000",
+        "text_color": "#000000",
+        "price_bg": "#000000",
+        "price_text": "#FFFFFF",
+        "cta_pulse": False,
+    }
+}
 
-def create_frame(t, product_img, hook, price, cta, title, ai_data, logo=None):
-    # Base brand color
-    bg_color = "#0F0A05"  # Dark brown — never changes
-
-    # Creative background enhancements based on AI analysis
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), bg_color)
+def create_frame(t, product_img, hook, price, cta, title, template, logo=None):
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), template["bg_color"])
     draw = ImageDraw.Draw(canvas)
 
-    # --- CREATIVE BACKGROUND ELEMENTS (AI-ENHANCED) ---
-    color = ai_data.get("color", "Grey").lower()
-    mood = ai_data.get("mood", "Elegant").lower()
+    # Gold rings
+    for cx, cy, r in [(540, 960, 600), (660, 840, 800), (360, 1140, 1000)]:
+        draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=template["ring_color"], width=4)
 
-    # Add subtle glowing orbs around product (color-tinted based on product)
-    orb_colors = {
-        "teal": "#00CED1",
-        "blue": "#1E90FF",
-        "grey": "#A9A9B0",
-        "gold": "#FFD700",
-        "brown": "#8B4513",
-        "white": "#FFFFFF",
-        "black": "#000000"
-    }
-    main_orb_color = "#FFD700"  # Always use gold for brand consistency
-    accent_orb_color = orb_colors.get(color.split()[0], "#FFD700")  # First word of color
-
-    # Floating orbs (size varies with time for gentle motion)
-    for i in range(3):
-        angle = t * 0.5 + i * 2
-        radius = 300 + 50 * np.sin(angle)
-        x = WIDTH // 2 + int(200 * np.cos(angle))
-        y = HEIGHT // 2 + int(150 * np.sin(angle))
-        # Draw semi-transparent orb
-        draw.ellipse([x-radius, y-radius, x+radius, y+radius],
-                     outline=main_orb_color, width=4, fill=None)
-
-    # Add soft gradient glow behind product (based on mood)
-    if "bold" in mood:
-        # Stronger glow
-        for r in [600, 800, 1000]:
-            draw.ellipse([WIDTH//2-r, HEIGHT//2-r, WIDTH//2+r, HEIGHT//2+r],
-                         outline="#FFD700", width=2, fill=None)
-    elif "cozy" in mood:
-        # Softer, warmer glow
-        for r in [500, 700, 900]:
-            draw.ellipse([WIDTH//2-r, HEIGHT//2-r, WIDTH//2+r, HEIGHT//2+r],
-                         outline="#FFD700", width=1, fill=None)
-
-    # --- PRODUCT WITH SLOW ROTATION ---
-    scale = 0.8 + 0.2 * (np.sin(t * 2) ** 2)
+    # Product with adjustments
+    base_scale = st.session_state.get("product_scale", 1.0)
+    scale = base_scale * (0.8 + 0.2 * (np.sin(t * 2) ** 2))
     size = int(900 * scale)
     resized = product_img.resize((size, size), Image.LANCZOS)
     angle = np.sin(t * 0.5) * 3
     rotated = resized.rotate(angle, expand=True, resample=Image.BICUBIC)
     prod_x = (WIDTH - rotated.width) // 2
-    prod_y = int(HEIGHT * 0.35 + np.sin(t * 3) * 30)
+    prod_y_offset = st.session_state.get("prod_y_offset", 0)
+    prod_y = int(HEIGHT * 0.35 + prod_y_offset + np.sin(t * 3) * 30)
     canvas.paste(rotated, (prod_x, prod_y), rotated if rotated.mode == 'RGBA' else None)
 
-    # --- FONTS ---
+    # Fonts (fixed sizes per template)
+    font_sizes = {
+        "Luxury": (100, 140, 160, 100),
+        "Bold": (100, 140, 160, 100),
+        "Minimalist": (90, 120, 140, 90),
+    }
+    tfs, hfs, pfs, cfs = font_sizes[template_choice]
+
     try:
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 100)
-        hook_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 140)
-        price_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 160)
-        cta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 100)
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", tfs)
+        hook_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", hfs)
+        price_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", pfs)
+        cta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", cfs)
     except:
         title_font = hook_font = price_font = cta_font = ImageFont.load_default()
 
-    # --- TITLE (above product) ---
-    title_max_w = WIDTH - 100
-    title_font = smart_text_size(draw, title, title_font, title_max_w)
+    # Text positions (adjustable)
+    title_y = st.session_state.get("title_y", 80)
+    hook_y = st.session_state.get("hook_y", 120)
+    price_y = st.session_state.get("price_y", HEIGHT - 500)
+    cta_y = st.session_state.get("cta_y", HEIGHT - 180)
+
+    # Title
     bbox = draw.textbbox((0, 0), title, font=title_font)
     text_w = bbox[2] - bbox[0]
     safe_x = max(50, (WIDTH - text_w) // 2)
-    draw.text((safe_x, 80), title, font=title_font, fill="#FFFFFF", stroke_width=4, stroke_fill="#000")
+    draw.text((safe_x, title_y), title, font=title_font, fill=template["text_color"], stroke_width=4, stroke_fill="#000")
 
-    # --- HOOK ---
-    hook_max_w = WIDTH - 100
-    hook_font = smart_text_size(draw, hook, hook_font, hook_max_w)
+    # Hook
     bbox = draw.textbbox((0, 0), hook, font=hook_font)
     text_w = bbox[2] - bbox[0]
     safe_x = max(50, (WIDTH - text_w) // 2)
-    draw.text((safe_x, 120), hook, font=hook_font, fill="#FFD700", stroke_width=6, stroke_fill="#000")
+    draw.text((safe_x, hook_y), hook, font=hook_font, fill=template["ring_color"], stroke_width=6, stroke_fill="#000")
 
-    # --- PRICE BADGE ---
+    # Price
     badge_w, badge_h = 750, 180
     badge_x = (WIDTH - badge_w) // 2
-    badge_y = HEIGHT - 500
-    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=90, fill="#FFD700")
+    draw.rounded_rectangle([badge_x, price_y, badge_x + badge_w, price_y + badge_h], radius=90, fill=template["price_bg"])
     p_bbox = draw.textbbox((0, 0), price, font=price_font)
-    draw.text((WIDTH // 2, badge_y + 30), price, font=price_font, fill="#FFFFFF", anchor="mm")
+    draw.text((WIDTH // 2, price_y + 30), price, font=price_font, fill=template["price_text"], anchor="mm")
 
-    # --- PULSING CTA ---
-    pulse_scale = 1 + 0.1 * np.sin(t * 8)
-    cta_font_size = int(100 * pulse_scale)
-    try:
-        cta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", cta_font_size)
-    except:
-        cta_font = ImageFont.load_default()
-    cta_max_w = WIDTH - 100
-    cta_font = smart_text_size(draw, cta, cta_font, cta_max_w)
+    # CTA
+    if template["cta_pulse"]:
+        pulse_scale = 1 + 0.1 * np.sin(t * 8)
+        cta_font_size = int(cfs * pulse_scale)
+        try:
+            cta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", cta_font_size)
+        except:
+            cta_font = ImageFont.load_default()
     c_bbox = draw.textbbox((0, 0), cta, font=cta_font)
     c_w = c_bbox[2] - c_bbox[0]
-    draw.text(((WIDTH - c_w) // 2, HEIGHT - 180), cta, font=cta_font, fill="#FFFFFF", stroke_width=5, stroke_fill="#000")
+    draw.text(((WIDTH - c_w) // 2, cta_y), cta, font=cta_font, fill=template["text_color"], stroke_width=5, stroke_fill="#000")
 
-    # --- LOGO ---
+    # Logo
     if logo:
-        canvas.paste(logo, (30, 30), logo)
-        glow = Image.new("RGBA", logo.size, (255, 255, 255, 30))
-        canvas.paste(glow, (25, 25), glow)
         canvas.paste(logo, (30, 30), logo)
 
     return np.array(canvas)
 
 # --- UI ---
-st.title("🎬 SM Interiors Reel Tool — AI-Powered & Layout-Smart")
-st.caption("Auto-scales text • AI analyzes image • Brand-consistent • Deployed Nov 24, 2025")
+st.title("🎬 SM Interiors Reel Tool — Pro Templates + AI Vision")
+st.caption("6s reels • Preview before render • Adjust layout • MP3 audio")
 
 col1, col2 = st.columns(2)
 
@@ -285,6 +268,8 @@ with col2:
     product_name = st.text_input("Product Name (optional)", "")
     image_desc = st.text_area("Image Description (optional)", "")
 
+    template_choice = st.selectbox("Template", list(TEMPLATES.keys()), index=0)
+
     if uploaded and img_bytes and st.button("✨ Analyze Image + Get AI Copy", type="secondary", use_container_width=True):
         ai_data = analyze_image_with_groq(img_bytes)
         st.session_state.hook = ai_data.get("hook", "This Sold Out in 24 H")
@@ -298,37 +283,74 @@ with col2:
     cta = st.text_input("CTA", value=st.session_state.get("cta", "DM TO ORDER • 0710 895 737"))
     music_key = st.selectbox("Music", list(MUSIC_URLS.keys()))
 
+# --- ADJUSTMENTS ---
+st.markdown("---")
+st.subheader("🔧 Adjust Layout (Optional)")
+
+with st.expander("Position & Size Controls"):
+    col_adj1, col_adj2 = st.columns(2)
+    with col_adj1:
+        prod_y_offset = st.slider("Product Vertical Position", -200, 200, 0, help="Move product up/down")
+        title_y = st.slider("Title Y", 50, 200, 80)
+        hook_y = st.slider("Hook Y", 50, 200, 120)
+    with col_adj2:
+        product_scale = st.slider("Product Scale", 0.5, 1.5, 1.0, step=0.1)
+        cta_y = st.slider("CTA Y", HEIGHT - 300, HEIGHT - 100, HEIGHT - 180)
+        price_y = st.slider("Price Y", HEIGHT - 600, HEIGHT - 300, HEIGHT - 500)
+
+# Save to session state
+st.session_state.prod_y_offset = prod_y_offset
+st.session_state.product_scale = product_scale
+st.session_state.title_y = title_y
+st.session_state.hook_y = hook_y
+st.session_state.cta_y = cta_y
+st.session_state.price_y = price_y
+st.session_state.template_choice = template_choice
+
+# --- PREVIEW ---
+if uploaded and product_img is not None:
+    st.markdown("---")
+    st.subheader("🖼️ Preview (Before Rendering)")
+    logo_img = load_logo()
+    template = TEMPLATES[template_choice]
+    preview_frame = create_frame(0, product_img, hook, price, cta, title, template, logo_img)
+    preview_img = Image.fromarray(preview_frame)
+    st.image(preview_img, caption="Preview Frame", use_column_width=True)
+    st.info("✅ Adjust sliders above if needed, then click 'Generate Reel'.")
+
+# --- RENDER ---
 if st.button("🚀 Generate Reel", type="primary", use_container_width=True):
     if not uploaded or product_img is None:
         st.error("Upload a photo!")
     else:
-        with st.spinner(f"Rendering with {music_key}…"):
+        with st.spinner(f"Rendering 6s video with {music_key}…"):
             logo_img = load_logo()
-            ai_data = st.session_state.get("ai_data", {"color": "Grey", "mood": "Elegant"})
-            frames = [create_frame(i / FPS, product_img, hook, price, cta, title, ai_data, logo_img) for i in range(FPS * DURATION)]
+            template = TEMPLATES[template_choice]
+            frames = [create_frame(i / FPS, product_img, hook, price, cta, title, template, logo_img) for i in range(FPS * DURATION)]
 
             clip = ImageSequenceClip(frames, fps=FPS)
 
-            # Audio handling
+            # Audio handling (MP3)
+            audio = None
             audio_path = None
             try:
                 resp = requests.get(MUSIC_URLS[music_key], timeout=10)
                 if resp.status_code == 200:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
                         tmp.write(resp.content)
                         audio_path = tmp.name
-                    audio = AudioFileClip(audio_path).subclip(0, min(DURATION, audio.duration))
+                    full_audio = AudioFileClip(audio_path)
+                    audio = full_audio.subclip(0, min(DURATION, full_audio.duration))
                     clip = clip.set_audio(audio)
             except Exception as e:
                 st.warning(f"Audio skipped: {e}")
 
-            # Export video
             video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
             clip.write_videofile(
                 video_path,
                 fps=FPS,
                 codec="libx264",
-                audio_codec="aac" if audio_path else None,
+                audio_codec="aac" if audio else None,
                 threads=4,
                 preset="medium",
                 logger=None
@@ -338,18 +360,13 @@ if st.button("🚀 Generate Reel", type="primary", use_container_width=True):
             st.video(video_path)
 
             with open(video_path, "rb") as f:
-                st.download_button(
-                    "💾 Download Reel",
-                    f,
-                    f"SM_Interiors_Reel_{price.replace(' ', '_').replace(',', '')}.mp4",
-                    "video/mp4",
-                    use_container_width=True
-                )
+                st.download_button("💾 Download Reel", f, "SM_Reel.mp4", "video/mp4", use_container_width=True)
 
             # Cleanup
-            if audio_path:
+            if audio_path and os.path.exists(audio_path):
                 os.unlink(audio_path)
-            os.unlink(video_path)
+            if os.path.exists(video_path):
+                os.unlink(video_path)
             clip.close()
 
 st.markdown("---")
