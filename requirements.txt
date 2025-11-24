@@ -9,3 +9,4 @@ moviepy==1.0.3
 rembg
 groq
 onnxruntime
+httpx
