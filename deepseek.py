@@ -1,4 +1,4 @@
-# app.py (ENHANCED - Multiple Advanced Features)
+# app.py (FIXED - Complete Advanced Version)
 import streamlit as st
 import numpy as np
 import imageio
@@ -7,9 +7,8 @@ import base64
 import math
 import random
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 import os
-from typing import List, Tuple
 
 st.set_page_config(page_title="Advanced Typing Animations", layout="centered")
 
@@ -47,14 +46,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ------------- ENHANCED Background Systems -------------
+# ------------- FIXED Background Systems -------------
 class AdvancedBackgroundGenerator:
     def __init__(self):
         self.themes = {
             "Golden Elegance": self.golden_elegance,
             "Deep Amber": self.deep_amber,
             "Vintage Sepia": self.vintage_sepia,
-           
+            "Royal Bronze": self.royal_bronze,
             "Sunset Gold": self.sunset_gold,
         }
     
@@ -123,10 +122,64 @@ class AdvancedBackgroundGenerator:
         
         return np.stack([r, g, b], axis=-1)
     
+    def royal_bronze(self, width, height, time_progress):
+        y, x = np.ogrid[0:height, 0:width]
+        y_norm, x_norm = y / height, x / width
+        t = time_progress * 2.2 * math.pi
+        
+        # Bronze metallic tones
+        base_r = (110 * (1 - y_norm) + 180 * y_norm).astype(np.uint8)
+        base_g = (80 * (1 - y_norm) + 140 * y_norm).astype(np.uint8)
+        base_b = (60 * (1 - y_norm) + 100 * y_norm).astype(np.uint8)
+        
+        # Metallic wave effects
+        wave1 = np.sin(x_norm * 10 * math.pi + t) * 20
+        wave2 = np.cos(y_norm * 7 * math.pi + t * 1.5) * 15
+        metallic = np.sin((x_norm * 5 + y_norm * 3) * math.pi + t * 2) * 10
+        
+        r = np.clip(base_r + wave1 * 0.7 + metallic * 0.5, 0, 255)
+        g = np.clip(base_g + wave1 * 0.5 + wave2 * 0.4, 0, 255)
+        b = np.clip(base_b + wave2 * 0.3 + metallic * 0.3, 0, 255)
+        
+        bg = np.stack([r, g, b], axis=-1)
+        
+        # Bronze highlights
+        highlights = (np.sin(x * 0.01 + y * 0.01 + t * 3) > 0.95)
+        bg[highlights] = [205, 127, 50]  # Bronze color
+        
+        return bg
+    
+    def sunset_gold(self, width, height, time_progress):
+        y, x = np.ogrid[0:height, 0:width]
+        y_norm, x_norm = y / height, x / width
+        t = time_progress * 1.8 * math.pi
+        
+        # Sunset colors - dark to bright gold
+        base_r = (130 * (1 - y_norm) + 255 * y_norm).astype(np.uint8)
+        base_g = (70 * (1 - y_norm) + 200 * y_norm).astype(np.uint8)
+        base_b = (30 * (1 - y_norm) + 100 * y_norm).astype(np.uint8)
+        
+        # Sunset wave patterns
+        wave1 = np.sin(x_norm * 6 * math.pi + t) * 25
+        wave2 = np.cos(y_norm * 4 * math.pi + t * 0.8) * 20
+        wave3 = np.sin((x_norm - y_norm) * 8 * math.pi + t * 1.2) * 15
+        
+        r = np.clip(base_r + wave1 * 0.8 + wave3 * 0.4, 0, 255)
+        g = np.clip(base_g + wave1 * 0.6 + wave2 * 0.5, 0, 255)
+        b = np.clip(base_b + wave2 * 0.4, 0, 255)
+        
+        bg = np.stack([r, g, b], axis=-1)
+        
+        # Sunset glow effect
+        glow_mask = (y_norm > 0.7) & (np.sin(x_norm * 4 * math.pi + t) > 0.5)
+        bg[glow_mask] = np.clip(bg[glow_mask] + [30, 30, 10], 0, 255)
+        
+        return bg
+    
     def get_theme(self, theme_name):
         return self.themes.get(theme_name, self.golden_elegance)
 
-# ------------- ENHANCED Text Animation Systems -------------
+# ------------- Text Animation Systems -------------
 class AdvancedTextAnimator:
     def __init__(self):
         self.animation_styles = {
@@ -146,8 +199,6 @@ class AdvancedTextAnimator:
         """Smooth opacity-based reveal"""
         chars_to_show = int(len(text) * progress)
         revealed_text = text[:chars_to_show]
-        
-        # For smooth reveal, we'll handle this in the drawing phase
         return revealed_text, progress
     
     def character_pop(self, text, progress, line_info):
@@ -179,7 +230,7 @@ class AdvancedTextAnimator:
         revealed_text = "\n".join(revealed_lines)
         return revealed_text, chars_to_show / len(text)
 
-# ------------- ENHANCED Layout System -------------
+# ------------- Layout System -------------
 class AdvancedTextLayout:
     def __init__(self, width, height, margins=80):
         self.width = width
@@ -245,9 +296,10 @@ class AdvancedTextLayout:
                     current_line.pop()
                     lines.append(' '.join(current_line))
                     current_line = [word]
-            elif word == words[-1]:
-                # Last word
-                lines.append(' '.join(current_line))
+        
+        # Add remaining words
+        if current_line:
+            lines.append(' '.join(current_line))
         
         return lines
     
@@ -264,12 +316,11 @@ class AdvancedTextLayout:
         
         return start_y
 
-# ------------- ENHANCED Frame Generator -------------
+# ------------- Frame Generator -------------
 class AdvancedFrameGenerator:
     def __init__(self):
         self.bg_generator = AdvancedBackgroundGenerator()
         self.text_animator = AdvancedTextAnimator()
-        self.layout_engine = AdvancedTextLayout(1080, 1920)
     
     def create_enhanced_frame(self, full_text, progress, frame_idx, total_frames, 
                             width, height, style_config):
@@ -281,12 +332,15 @@ class AdvancedFrameGenerator:
         img = Image.fromarray(bg)
         draw = ImageDraw.Draw(img)
         
+        # Initialize layout engine
+        layout_engine = AdvancedTextLayout(width, height)
+        
         # Calculate layout
-        font, font_size = self.layout_engine.calculate_optimal_layout(full_text, style_config)
+        font, font_size = layout_engine.calculate_optimal_layout(full_text, style_config)
         
         # Break text into lines
-        lines = self.layout_engine.break_text_into_lines(
-            full_text, font, self.layout_engine.content_width
+        lines = layout_engine.break_text_into_lines(
+            full_text, font, layout_engine.content_width
         )
         
         line_info = {
@@ -307,12 +361,19 @@ class AdvancedFrameGenerator:
             line_height = font_size * style_config['line_spacing']
         
         visible_lines = visible_text.split('\n') if visible_text else []
-        start_y = self.layout_engine.calculate_text_block_position(
+        start_y = layout_engine.calculate_text_block_position(
             visible_lines, font, line_height
         )
         
+        # Convert color strings to RGB tuples
+        text_color = self.hex_to_rgb(style_config['text_color'])
+        shadow_color = self.hex_to_rgb(style_config['shadow_color'])
+        
         # Draw text with enhanced styling
         for i, line in enumerate(visible_lines):
+            if not line.strip():  # Skip empty lines
+                continue
+                
             y_pos = start_y + i * line_height
             
             try:
@@ -325,8 +386,6 @@ class AdvancedFrameGenerator:
             
             # Enhanced text effects
             shadow_blur = 3
-            shadow_color = style_config['shadow_color']
-            text_color = style_config['text_color']
             
             # Text shadow
             for dx, dy in [(shadow_blur, shadow_blur), (0, shadow_blur), (shadow_blur, 0)]:
@@ -334,18 +393,13 @@ class AdvancedFrameGenerator:
             
             # Main text
             draw.text((x_pos, y_pos), line, font=font, fill=text_color)
-            
-            # Add subtle glow for certain styles
-            if style_config.get('glow_effect', False):
-                for glow_size in [1]:
-                    try:
-                        glow_font = ImageFont.truetype(style_config['font_family'], font_size + glow_size)
-                        draw.text((x_pos, y_pos), line, font=glow_font, 
-                                fill=text_color + (100,))  # Semi-transparent
-                    except:
-                        pass
         
         return np.array(img)
+    
+    def hex_to_rgb(self, hex_color):
+        """Convert hex color to RGB tuple"""
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
 # ------------- Video Generation -------------
 def generate_enhanced_video(sentence, duration, width, height, style_config, output_path):
@@ -396,19 +450,10 @@ def get_video_html(video_path):
     except Exception as e:
         return f"<p style='color:red;'>Error loading video: {str(e)}</p>"
 
-# ------------- Main UI with Enhanced Features -------------
+# ------------- Main UI -------------
 with st.container():
     st.markdown('<div class="glass">', unsafe_allow_html=True)
     st.markdown("<h1 style='text-align:center;color:#ffffff'>🎬 Advanced Typing Animations</h1>", unsafe_allow_html=True)
-    
-    # Feature showcase
-    st.markdown("""
-    <div style='text-align:center; margin-bottom:2rem;'>
-        <span style='background:linear-gradient(45deg, #FFD700, #FFA500); -webkit-background-clip:text; -webkit-text-fill-color:transparent; font-weight:bold;'>
-            Multiple Themes • Advanced Animations • Custom Styles
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
     
     # Configuration in expandable sections
     with st.expander("🎨 Style Configuration", expanded=True):
@@ -456,7 +501,6 @@ with st.container():
             base_font_size = st.slider("Base Font Size", 20, 100, 60)
             font_reduction = st.slider("Font Reduction", 10, 30, 15)
         with col2:
-            glow_effect = st.checkbox("Enable Glow Effect", True)
             fast_mode = st.checkbox("Fast Generation Mode", True)
     
     resolution_map = {"720x1280": (720, 1280), "1080x1920": (1080, 1920)}
@@ -471,7 +515,6 @@ with st.container():
         'line_spacing': line_spacing,
         'base_font_size': base_font_size,
         'font_reduction_factor': font_reduction,
-        'glow_effect': glow_effect,
         'font_family': "Arial.ttf",
         'max_font_size': 80,
         'min_font_size': 24
@@ -562,18 +605,18 @@ with st.container():
     with features_col1:
         st.markdown("""
         <div class='feature-card'>
-        <h4>🎨 Multiple Themes</h4>
-        <p>Choose from 5 professionally designed brown/gold color schemes</p>
+        <h4>🎨 5 Background Themes</h4>
+        <p>Golden Elegance, Deep Amber, Vintage Sepia, Royal Bronze, Sunset Gold</p>
         </div>
         
         <div class='feature-card'>
-        <h4>✨ Advanced Animations</h4>
-        <p>4 different typing effects including smooth reveals and pop animations</p>
+        <h4>✨ 4 Animation Styles</h4>
+        <p>Typewriter, Smooth Reveal, Character Pop, and Wave Typing effects</p>
         </div>
         
         <div class='feature-card'>
-        <h4>🎯 Smart Layout</h4>
-        <p>Automatic text sizing, line breaking, and perfect centering</p>
+        <h4>🎯 Smart Text Layout</h4>
+        <p>Automatic font sizing, line breaking, and perfect centering</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -581,7 +624,7 @@ with st.container():
         st.markdown("""
         <div class='feature-card'>
         <h4>🌈 Custom Colors</h4>
-        <p>Full control over text and shadow colors with color picker</p>
+        <p>Full control over text and shadow colors with color pickers</p>
         </div>
         
         <div class='feature-card'>
