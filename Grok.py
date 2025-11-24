@@ -13,9 +13,9 @@ if "elements" not in st.session_state:
     st.session_state.elements = {
         "sofa":  {"x": 540, "y": 900, "w": 860, "h": 860, "img": None},
         "logo":  {"x": 100, "y": 100, "w": 200, "h": 100, "img": None},
-        "hook":  {"x": 540, "y": 300, "text": "This Sold Out in 24 Hours", "size": 100},
-        "price": {"x": 540, "y": 1460,"text": "Ksh 94,900", "size": 120},
-        "cta":   {"x": 540, "y": 1700,"text": "DM 0710 895 737", "size": 90},
+        "hook":  {"x": 540, "y": 300, "text": "This Sold Out in 24 Hours", "size": 600},
+        "price": {"x": 540, "y": 1460,"text": "Ksh 94,900", "size": 620},
+        "cta":   {"x": 540, "y": 1700,"text": "DM 0710 895 737", "size": 690},
     }
 
 el = st.session_state.elements
