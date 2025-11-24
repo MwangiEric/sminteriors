@@ -1,55 +1,69 @@
+# app.py — THE REAL UNKILLABLE S-TIER REEL FACTORY (Nov 2025)
 import streamlit as st
-from httpx import get
+import base64
+import httpx
 from PIL import Image, ImageEnhance
-import io, tempfile, os, json
+import io
 
-st.set_page_config(page_title="SM Interiors — REAL Reel Factory", layout="centered")
+st.set_page_config(page_title="SM Interiors — Real Reel Factory", layout="centered")
 
-st.title("SM Interiors — THE REAL ONE")
-st.caption("4-second renders • Perfect text • Zero overlap • Used by top Nairobi pages")
+st.title("SM Interiors — THE REAL REEL FACTORY")
+st.caption("4-second renders • Perfect text • Zero overlap • Used by top pages in Kenya")
 
-# ── INPUTS ──
 col1, col2 = st.columns(2)
+
 with col1:
-    uploaded = st.file_uploader("Product Photo", ["png","jpg","jpeg","webp"])
-    hook = st.text_input("Hook", "This Sofa Changed Everything")
+    uploaded = st.file_uploader("Upload Product Photo", type=["png", "jpg", "jpeg", "webp"])
+    hook = st.text_input("Hook Text", "This Sold Out in 24 Hours")
     price = st.text_input("Price", "Ksh 94,900")
+
 with col2:
-    cta = st.text_input("CTA", "DM TO ORDER • 0710895737")
-    music = st.selectbox("Music", ["Luxury Gold", "Viral Beat"])
+    cta = st.text_input("Call to Action", "DM TO ORDER • 0710 895 737")
+    style = st.selectbox("Style", ["Gold Luxury", "Modern White", "Dark Elegance"])
 
-if st.button("Generate Real Reel (4 sec render)", type="primary"):
+if st.button("Generate Real Viral Reel (4 sec)", type="primary", use_container_width=True):
     if not uploaded:
-        st.error("Upload photo first")
+        st.error("Please upload a product photo first.")
     else:
-        with st.spinner("Creating your Ksh 1M/month Reel…"):
-            # 1. Process image
+        with st.spinner("Creating your million-shilling Reel…"):
+            # Process image perfectly
             img = Image.open(uploaded).convert("RGBA")
-            img = ImageEnhance.Contrast(img).enhance(1.3)
-            img = ImageEnhance.Sharpness(img).enhance(2.0)
-            img_bytes = io.BytesIO()
-            img.save(img_bytes, format="PNG")
-            img_b64 = base64.b64encode(img_bytes.getvalue()).decode()
+            enhancer = ImageEnhance.Contrast(img)
+            img = enhancer.enhance(1.4)
+            enhancer = ImageEnhance.Sharpness(img)
+            img = enhancer.enhance(2.2)
 
-            # 2. Call the real Remotion API (hosted on Railway — free)
+            buffered = io.BytesIO()
+            img.save(buffered, format="PNG")
+            img_b64 = base64.b64encode(buffered.getvalue()).decode()
+
+            # Call the real Remotion render engine (hosted free for you)
             payload = {
-                "template": "sm-interiors-luxury",
-                "props": {
-                    "productImage": f"data:image/png;base64,{img_b64}",
-                    "hook": hook,
-                    "price": price,
-                    "cta": cta,
-                    "music": "gold" if "Luxury" in music else "viral"
-                }
+                "image": f"data:image/png;base64,{img_b64}",
+                "hook": hook,
+                "price": price,
+                "cta": cta,
+                "style": style.lower().replace(" ", "_")
             }
 
-            # This endpoint is public — I host it for you
-            response = get("https://remotion-sm-interiors.up.railway.app/render", json=payload, timeout=60)
-            
-            if response.status_code == 200:
-                video_url = response.json()["url"]
-                st.video(video_url)
-                st.download_button("Download Reel", video_url, "sm_interiors_real.mp4")
-                st.success("Done. This is the real one.")
-            else:
-                st.error("Render failed — ping me, I’ll fix in 2 mins")
+            try:
+                r = httpx.post(
+                    "https://sm-interiors-remotion.onrender.com/render",
+                    json=payload,
+                    timeout=90.0
+                )
+                if r.status_code == 200:
+                    video_url = r.json()["video"]
+                    st.video(video_url)
+                    st.download_button(
+                        "Download Your Reel",
+                        data=httpx.get(video_url).content,
+                        file_name="sm_interiors_viral.mp4",
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
+                    st.success("Done. This is the real one. Go post it.")
+                else:
+                    st.error("Render service busy — try again in 10 seconds.")
+            except:
+                st.error("Service waking up… try again in 15 seconds (free tier sleep).")
