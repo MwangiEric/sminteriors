@@ -28,9 +28,9 @@ if "elements" not in st.session_state:
     st.session_state.elements = {
         "sofa":  {"x": 540, "y": 900, "w": 860, "h": 860, "img": None},
         "logo":  {"x": 100, "y": 100, "w": 200, "h": 100, "img": None},
-        "hook":  {"x": 540, "y": 300, "text": "This Sold Out in 24 Hours", "size": 140},
-        "price": {"x": 540, "y": 1460,"text": "Ksh 94,900", "size": 160},
-        "cta":   {"x": 540, "y": 1700,"text": "DM 0710 895 737", "size": 120},
+        "hook":  {"x": 540, "y": 600, "text": "This Sold Out in 24 Hours", "size": 140},
+        "price": {"x": 540, "y": 1460,"text": "Ksh 94,900", "size": 660},
+        "cta":   {"x": 540, "y": 1700,"text": "DM 0710 895 737", "size": 720},
     }
 # Initialize selected element for moving
 if "selected_element" not in st.session_state:
@@ -89,9 +89,9 @@ with st.sidebar:
         el["logo"]["img"] = el["logo"]["img"].resize((el["logo"]["w"], el["logo"]["h"]), Image.LANCZOS)
     
     st.markdown("### Font Sizes (pt)")
-    el["hook"]["size"] = st.slider("Hook Size", 80, 250, el["hook"]["size"])
-    el["price"]["size"] = st.slider("Price Size", 100, 300, el["price"]["size"])
-    el["cta"]["size"] = st.slider("CTA Size", 80, 200, el["cta"]["size"])
+    el["hook"]["size"] = st.slider("Hook Size", 250, 1000, el["hook"]["size"])
+    el["price"]["size"] = st.slider("Price Size", 100, 1000, el["price"]["size"])
+    el["cta"]["size"] = st.slider("CTA Size", 200, 1000, el["cta"]["size"])
 
 
 # --- Canvas with drag functionality and element selection ---
