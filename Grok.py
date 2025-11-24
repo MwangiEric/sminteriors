@@ -1,130 +1,120 @@
+# app.py — Streamlit Pro Layout Editor (Drag + Sliders + Upload)
 import streamlit as st
-import random
-import hashlib
-import requests
-import base64
+from streamlit_canvas import st_canvas
+from PIL import Image
+import io
 
-st.set_page_config(page_title="SM DIY Reels Pro", layout="centered")
+st.set_page_config(page_title="SM Interiors Layout Editor", layout="centered")
+st.title("SM Interiors — Pro Reel Layout Editor")
+st.caption("Drag • Resize • Upload • Real-time 1080×1920 preview")
 
-# Your logo
-LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png"
-logo_b64 = base64.b64encode(requests.get(LOGO_URL, timeout=10).content).decode()
+# Initialize session state
+if "elements" not in st.session_state:
+    st.session_state.elements = {
+        "sofa":  {"x": 540, "y": 900, "w": 860, "h": 860, "img": None},
+        "logo":  {"x": 100, "y": 100, "w": 200, "h": 100, "img": None},
+        "hook":  {"x": 540, "y": 300, "text": "This Sold Out in 24 Hours", "size": 100},
+        "price": {"x": 540, "y": 1460,"text": "Ksh 94,900", "size": 120},
+        "cta":   {"x": 540, "y": 1700,"text": "DM 0710 895 737", "size": 90},
+    }
 
-# 20+ Viral DIY Furniture Tip Topics (Nairobi-tested)
-DIY_TOPICS = [
-    "How to clean white fabric sofa with only Ksh 50 items",
-    "Remove scratches from wooden table in 60 seconds",
-    "Make your old chair look brand new (no painting)",
-    "Eco-friendly polish for teak furniture",
-    "Fix wobbly dining table forever",
-    "Turn Ksh 200 bleach into luxury leather cleaner",
-    "Remove ink stains from couch instantly",
-    "Make glass table shine like diamond",
-    "Stop leather sofa from cracking (Kenyan weather hack)",
-    "Clean velvet headboard without water",
-    "Refresh outdoor plastic chairs in 5 minutes",
-    "Remove candle wax from wooden surface",
-    "Deep clean marble coffee table naturally",
-    "Stop fabric sofa from fading in sun",
-    "Fix peeling veneer on wardrobe",
-    "Remove permanent marker from white furniture",
-    "Make brass handles shine again",
-    "Clean dusty wooden carvings easily",
-    "Restore shine to dull laminate floors",
-    "Follow for more tips → DM 0710 895 737"
-]
+el = st.session_state.elements
 
-# Brand themes
-THEMES = [
-    ("#2C1810", "#D4A574", "#FFFFFF"),
-    ("#0F0A05", "#FFD700", "#FFFFFF"),
-    ("#1E293B", "#FCD34D", "#1E293B"),
-]
+# Uploads
+col1, col2 = st.columns(2)
+with col1:
+    sofa_file = st.file_uploader("Upload Sofa Photo", type=["png","jpg","jpeg"])
+    if sofa_file:
+        img = Image.open(sofa_file).convert("RGBA")
+        img = img.resize((el["sofa"]["w"], el["sofa"]["h"]), Image.LANCZOS)
+        el["sofa"]["img"] = img
+with col2:
+    logo_file = st.file_uploader("Upload Logo", type=["png","jpg","jpeg"])
+    if logo_file:
+        img = Image.open(logo_file).convert("RGBA")
+        img = img.resize((el["logo"]["w"], el["logo"]["h"]), Image.LANCZOS)
+        el["logo"]["img"] = img
 
-def get_theme(text):
-    h = int(hashlib.md5(text.encode()).hexdigest(), 16)
-    return THEMES[h % len(THEMES)]
+# Sliders
+st.subheader("Resize Everything")
+c1, c2, c3 = st.columns(3)
+with c1:
+    el["sofa"]["w"] = st.slider("Sofa Width", 400, 1000, el["sofa"]["w"], 10)
+    el["sofa"]["h"] = st.slider("Sofa Height", 400, 1400, el["sofa"]["h"], 10)
+    if el["sofa"]["img"]:
+        el["sofa"]["img"] = el["sofa"]["img"].resize((el["sofa"]["w"], el["sofa"]["h"]), Image.LANCZOS)
+with c2:
+    el["logo"]["w"] = st.slider("Logo Width", 100, 400, el["logo"]["w"], 10)
+    el["logo"]["h"] = st.slider("Logo Height", 50, 300, el["logo"]["h"], 10)
+    if el["logo"]["img"]:
+        el["logo"]["img"] = el["logo"]["img"].resize((el["logo"]["w"], el["logo"]["h"]), Image.LANCZOS)
+with c3:
+    el["hook"]["size"] = st.slider("Hook Size", 60, 180, el["hook"]["size"])
+    el["price"]["size"] = st.slider("Price Size", 80, 200, el["price"]["size"])
+    el["cta"]["size"] = st.slider("CTA Size", 60, 140, el["cta"]["size"])
 
-st.title("SM Interiors — 6-Second DIY Reel Pro")
-st.caption("Random viral tip • Final CTA • Ready to charge Ksh 35k+")
+# Canvas with drag
+canvas_result = st_canvas(
+    fill_color="rgba(255, 215, 0, 0.1)",
+    stroke_width=0,
+    background_color="#0F0A05",
+    background_image=None,
+    update_streamlit=True,
+    height=960,
+    width=540,
+    drawing_mode="rect",
+    key="canvas",
+)
 
-# Topic selector
-selected_topic = st.selectbox("Choose DIY Tip Topic", DIY_TOPICS, index=0)
+# Draw everything
+bg = Image.new("RGB", (1080, 1920), (15,10,5))
+draw = ImageDraw.Draw(bg)
 
-if st.button("Generate 6-Second Reel Now", type="primary"):
-    with st.spinner("Cooking viral content..."):
-        tip = selected_topic
-        bg1, bg2, txt_col = get_theme(tip)
+# Gold rings
+for r in [500, 750, 1000]:
+    draw.ellipse([540-r, 960-r, 540+r, 960+r], outline=(255,215,0), width=6)
 
-        # Split tip and CTA (last line is always CTA)
-        lines = tip.strip().split("\n")
-        main_tip = "\n".join(lines[:-1]) if "Follow for more" in tip else tip
-        cta_line = "Follow for more tips → DM 0710 895 737"
+# Sofa
+if el["sofa"]["img"]:
+    x = el["sofa"]["x"] - el["sofa"]["w"]//2
+    y = el["sofa"]["y"] - el["sofa"]["h"]//2
+    bg.paste(el["sofa"]["img"], (x, y), el["sofa"]["img"])
 
-        html = f"""
-        <style>body{{margin:0;background:#000;overflow:hidden}}</style>
-        <canvas id="c"></canvas>
-        <script>
-        const canvas = document.getElementById('c');
-        const ctx = canvas.getContext('2d');
-        canvas.width = 1080; canvas.height = 1920;
-        const logo = new Image(); logo.src = "data:image/png;base64,{logo_b64}";
-        let frame = 0;
-        const totalFrames = 180; // 6 sec @ 30fps
+# Logo
+if el["logo"]["img"]:
+    bg.paste(el["logo"]["img"], (el["logo"]["x"], el["logo"]["y"]), el["logo"]["img"])
 
-        function draw() {{
-            // Background gradient
-            const grad = ctx.createLinearGradient(0,0,0,1920);
-            grad.addColorStop(0, "{bg1}"); grad.addColorStop(1, "{bg2}");
-            ctx.fillStyle = grad; ctx.fillRect(0,0,1080,1920);
+# Text
+for name in ["hook", "price", "cta"]:
+    text = el[name]["text"]
+    size = el[name]["size"]
+    try:
+        font = ImageFont.truetype("arialbd.ttf", size)
+    except:
+        font = ImageFont.load_default()
+    w = draw.textlength(text, font=font)
+    x = el[name]["x"] - w//2
+    y = el[name]["y"] - size//2
+    draw.text((x, y), text, fill=(255,255,255), font=font,
+              stroke_width=6, stroke_fill=(0,0,0))
 
-            // Logo (top-left, always visible)
-            ctx.globalAlpha = 1;
-            ctx.drawImage(logo, 60, 60, 180, 90);
+# Display
+st.image(bg.resize((540,960)), use_column_width=True)
 
-            if (frame < 140) {{ // First 4.6s: Typewriter tip
-                const shownChars = Math.floor((frame / 140) * {len(main_tip)});
-                const text = "{main_tip}".substring(0, shownChars);
+# Drag logic (from canvas clicks)
+if canvas_result.json_data:
+    objects = canvas_result.json_data["objects"]
+    if objects:
+        obj = objects[-1]
+        if obj["type"] == "rect":
+            name = st.selectbox("Move which element?", ["sofa", "logo", "hook", "price", "cta"])
+            el[name]["x"] = int(obj["left"] * 2 + obj["width"])
+            el[name]["y"] = int(obj["top"] * 2 + obj["height"]//2)
+            st.experimental_rerun()
 
-                ctx.font = "bold 86px Arial";
-                ctx.fillStyle = "{txt_col}";
-                ctx.strokeStyle = "#000";
-                ctx.lineWidth = 10;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
+# Final output
+if st.button("PRINT FINAL LAYOUT CODE"):
+    st.code(f"elements = {st.session_state.elements}", language="python")
+    st.success("Copy this into your Reel generator → perfect every time")
 
-                text.split('\n').forEach((line, i) => {{
-                    ctx.strokeText(line, 540, 860 + i*100);
-                    ctx.fillText(line, 540, 860 + i*100);
-                }});
-            }} else {{ // Last 1.4s: CTA screen
-                ctx.fillStyle = "rgba(0,0,0,0.7)";
-                ctx.fillRect(0, 1200, 1080, 720);
-
-                ctx.font = "bold 90px Arial";
-                ctx.fillStyle = "#FFD700";
-                ctx.strokeStyle = "#000";
-                ctx.lineWidth = 10;
-                ctx.textAlign = "center";
-                ctx.strokeText("{cta_line}", 540, 1500);
-                ctx.fillText("{cta_line}", 540, 1500);
-
-                // Big logo center
-                ctx.drawImage(logo, 340, 1350, 400, 200);
-            }}
-
-            frame++;
-            if (frame <= totalFrames) requestAnimationFrame(draw);
-            else {{
-                const a = document.createElement('a');
-                a.download = 'sm_diy_tip.mp4';
-                a.href = canvas.captureStream(30).getVideoTracks?.()[0]?.requestFrame?.() || canvas.toDataURL();
-                a.click();
-            }}
-        }}
-        draw();
-        </script>
-        """
-        st.components.v1.html(html, height=1920, width=1080)
-        st.success(f"Reel Ready → {tip.split(' → ')[0][:50]}...")
-        st.caption("Download starts automatically • 6 seconds • <3MB • Charge Ksh 35k+")
+st.caption("You now control pixels like a pro. Charge Ksh 80,000 per Reel.")
