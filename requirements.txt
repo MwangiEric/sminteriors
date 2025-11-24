@@ -1,4 +1,4 @@
-Streamlit_canvas
+streamlit-drawable-canvas
 Pillow
 numpy
 imageio
