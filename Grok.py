@@ -1,6 +1,6 @@
 # app.py — Streamlit Pro Layout Editor (Drag + Sliders + Upload)
 import streamlit as st
-from streamlit_canvas import st_canvas
+from streamlit_drawable_canvas import st_canvas
 from PIL import Image
 import io
 
