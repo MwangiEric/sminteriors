@@ -1,4 +1,4 @@
-# app.py (ENHANCED - Logo + Larger Text + Groq Integration)
+# app.py (FIXED - Logo in Videos + Groq Integration + Proper Text Sizing)
 import streamlit as st
 import numpy as np
 import imageio
@@ -7,16 +7,16 @@ import base64
 import math
 import random
 import requests
+import os
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-import os
 import io
 
 # Set page config first
-st.set_page_config(page_title="Premium Typing Animations", layout="centered")
+st.set_page_config(page_title="DIY Animation Creator", layout="centered")
 
-# Add your Groq API key (you can set this in Streamlit secrets)
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "your_groq_api_key_here")
+# Use groq_key from secrets
+GROQ_API_KEY = st.secrets.get("groq_key", os.getenv("GROQ_API_KEY"))
 
 st.markdown(
     """
@@ -55,6 +55,12 @@ st.markdown(
         max-width: 200px;
         height: auto;
     }
+    .diy-section {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -62,247 +68,127 @@ st.markdown(
 
 # ------------- Logo Integration -------------
 def load_logo():
-    """Load and display the logo"""
+    """Load and resize logo for video frames"""
     logo_url = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
     try:
         response = requests.get(logo_url)
         logo_image = Image.open(io.BytesIO(response.content))
+        # Resize logo to appropriate size for videos
+        logo_size = (120, 60)  # Width, Height - good size for video overlay
+        logo_image = logo_image.resize(logo_size, Image.Resampling.LANCZOS)
         return logo_image
     except Exception as e:
         st.warning(f"Could not load logo: {e}")
-        return None
+        # Create a simple text logo as fallback
+        img = Image.new('RGBA', (120, 60), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("Arial.ttf", 20)
+        except:
+            font = ImageFont.load_default()
+        draw.text((10, 20), "LOGO", fill=(255, 215, 0), font=font)
+        return img
 
-# ------------- Background Systems -------------
-class AdvancedBackgroundGenerator:
+# ------------- FIXED Background Systems -------------
+class StableBackgroundGenerator:
     def __init__(self):
         self.themes = {
             "Golden Elegance": self.golden_elegance,
             "Deep Amber": self.deep_amber,
             "Vintage Sepia": self.vintage_sepia,
-            "Royal Bronze": self.royal_bronze,
-            "Sunset Gold": self.sunset_gold,
         }
     
     def golden_elegance(self, width, height, time_progress):
-        y, x = np.ogrid[0:height, 0:width]
-        y_norm, x_norm = y / height, x / width
-        t = time_progress * 3 * math.pi
+        """Fixed background generation with consistent dimensions"""
+        # Create consistent array shape
+        bg = np.zeros((height, width, 3), dtype=np.uint8)
         
-        base_r = (120 * (1 - y_norm) + 255 * y_norm).astype(np.uint8)
-        base_g = (80 * (1 - y_norm) + 220 * y_norm).astype(np.uint8)
-        base_b = (40 * (1 - y_norm) + 100 * y_norm).astype(np.uint8)
+        for y in range(height):
+            for x in range(width):
+                # Simple gradient that's guaranteed to work
+                r = int(100 + (155 * y / height) + math.sin(x * 0.01 + time_progress * 10) * 20)
+                g = int(80 + (140 * y / height) + math.cos(y * 0.01 + time_progress * 8) * 15)
+                b = int(40 + (60 * y / height) + math.sin((x + y) * 0.005 + time_progress * 12) * 10)
+                
+                bg[y, x] = [
+                    max(0, min(255, r)),
+                    max(0, min(255, g)),
+                    max(0, min(255, b))
+                ]
         
-        wave1 = np.sin(x_norm * 8 * math.pi + t) * 25
-        wave2 = np.cos(y_norm * 6 * math.pi + t * 1.3) * 20
-        wave3 = np.sin((x_norm + y_norm) * 10 * math.pi + t * 0.7) * 15
-        
-        r = np.clip(base_r + wave1 * 0.8 + wave3 * 0.3, 0, 255).astype(np.uint8)
-        g = np.clip(base_g + wave1 * 0.6 + wave2 * 0.4, 0, 255).astype(np.uint8)
-        b = np.clip(base_b + wave2 * 0.5 + wave3 * 0.2, 0, 255).astype(np.uint8)
-        
-        bg = np.stack([r, g, b], axis=-1)
-        
-        sparkle_intensity = (np.sin(x.astype(float) * y.astype(float) * 0.0002 + t * 8) > 0.99)
-        bg[sparkle_intensity] = [255, 240, 160]
-        
-        return bg.astype(np.uint8)
+        return bg
     
     def deep_amber(self, width, height, time_progress):
-        y, x = np.ogrid[0:height, 0:width]
-        y_norm, x_norm = y / height, x / width
-        t = time_progress * 2.5 * math.pi
+        bg = np.zeros((height, width, 3), dtype=np.uint8)
         
-        base_r = (150 * (1 - y_norm) + 255 * y_norm).astype(np.uint8)
-        base_g = (100 * (1 - y_norm) + 180 * y_norm).astype(np.uint8)
-        base_b = (50 * (1 - y_norm) + 80 * y_norm).astype(np.uint8)
+        for y in range(height):
+            for x in range(width):
+                r = int(150 + (105 * y / height) + math.sin(x * 0.02 + time_progress * 6) * 25)
+                g = int(100 + (80 * y / height) + math.cos(y * 0.015 + time_progress * 7) * 20)
+                b = int(50 + (30 * y / height) + math.sin((x - y) * 0.01 + time_progress * 5) * 15)
+                
+                bg[y, x] = [
+                    max(0, min(255, r)),
+                    max(0, min(255, g)),
+                    max(0, min(255, b))
+                ]
         
-        wave1 = np.sin(x_norm * 12 * math.pi + t) * 30
-        wave2 = np.cos(y_norm * 8 * math.pi + t * 1.7) * 25
-        
-        r = np.clip(base_r + wave1 * 0.9, 0, 255).astype(np.uint8)
-        g = np.clip(base_g + wave1 * 0.7 + wave2 * 0.5, 0, 255).astype(np.uint8)
-        b = np.clip(base_b + wave2 * 0.6, 0, 255).astype(np.uint8)
-        
-        return np.stack([r, g, b], axis=-1).astype(np.uint8)
+        return bg
     
     def vintage_sepia(self, width, height, time_progress):
-        y, x = np.ogrid[0:height, 0:width]
-        y_norm = y / height
-        t = time_progress * 2 * math.pi
+        bg = np.zeros((height, width, 3), dtype=np.uint8)
         
-        base_r = (120 * (1 - y_norm) + 200 * y_norm).astype(np.uint8)
-        base_g = (100 * (1 - y_norm) + 170 * y_norm).astype(np.uint8)
-        base_b = (80 * (1 - y_norm) + 120 * y_norm).astype(np.uint8)
+        for y in range(height):
+            for x in range(width):
+                r = int(120 + (80 * y / height) + (random.random() * 10 - 5))
+                g = int(100 + (70 * y / height) + (random.random() * 10 - 5))
+                b = int(80 + (40 * y / height) + (random.random() * 10 - 5))
+                
+                bg[y, x] = [r, g, b]
         
-        noise = (np.random.rand(height, width) * 20 - 10).astype(np.float32)
-        
-        r = np.clip(base_r.astype(np.float32) + noise, 0, 255).astype(np.uint8)
-        g = np.clip(base_g.astype(np.float32) + noise * 0.8, 0, 255).astype(np.uint8)
-        b = np.clip(base_b.astype(np.float32) + noise * 0.6, 0, 255).ast(np.uint8)
-        
-        return np.stack([r, g, b], axis=-1).astype(np.uint8)
-    
-    def royal_bronze(self, width, height, time_progress):
-        y, x = np.ogrid[0:height, 0:width]
-        y_norm, x_norm = y / height, x / width
-        t = time_progress * 2.2 * math.pi
-        
-        base_r = (110 * (1 - y_norm) + 180 * y_norm).astype(np.uint8)
-        base_g = (80 * (1 - y_norm) + 140 * y_norm).astype(np.uint8)
-        base_b = (60 * (1 - y_norm) + 100 * y_norm).astype(np.uint8)
-        
-        wave1 = np.sin(x_norm * 10 * math.pi + t) * 20
-        wave2 = np.cos(y_norm * 7 * math.pi + t * 1.5) * 15
-        metallic = np.sin((x_norm * 5 + y_norm * 3) * math.pi + t * 2) * 10
-        
-        r = np.clip(base_r.astype(np.float32) + wave1 * 0.7 + metallic * 0.5, 0, 255).astype(np.uint8)
-        g = np.clip(base_g.astype(np.float32) + wave1 * 0.5 + wave2 * 0.4, 0, 255).astype(np.uint8)
-        b = np.clip(base_b.astype(np.float32) + wave2 * 0.3 + metallic * 0.3, 0, 255).astype(np.uint8)
-        
-        bg = np.stack([r, g, b], axis=-1)
-        
-        highlights = (np.sin(x.astype(float) * 0.01 + y.astype(float) * 0.01 + t * 3) > 0.95)
-        bg[highlights] = [205, 127, 50]
-        
-        return bg.astype(np.uint8)
-    
-    def sunset_gold(self, width, height, time_progress):
-        y, x = np.ogrid[0:height, 0:width]
-        y_norm, x_norm = y / height, x / width
-        t = time_progress * 1.8 * math.pi
-        
-        base_r = (130 * (1 - y_norm) + 255 * y_norm).astype(np.uint8)
-        base_g = (70 * (1 - y_norm) + 200 * y_norm).astype(np.uint8)
-        base_b = (30 * (1 - y_norm) + 100 * y_norm).astype(np.uint8)
-        
-        wave1 = np.sin(x_norm * 6 * math.pi + t) * 25
-        wave2 = np.cos(y_norm * 4 * math.pi + t * 0.8) * 20
-        wave3 = np.sin((x_norm - y_norm) * 8 * math.pi + t * 1.2) * 15
-        
-        r = np.clip(base_r.astype(np.float32) + wave1 * 0.8 + wave3 * 0.4, 0, 255).astype(np.uint8)
-        g = np.clip(base_g.astype(np.float32) + wave1 * 0.6 + wave2 * 0.5, 0, 255).astype(np.uint8)
-        b = np.clip(base_b.astype(np.float32) + wave2 * 0.4, 0, 255).astype(np.uint8)
-        
-        bg = np.stack([r, g, b], axis=-1)
-        
-        glow_mask = (y_norm > 0.7) & (np.sin(x_norm * 4 * math.pi + t) > 0.5)
-        glow_addition = np.array([30, 30, 10], dtype=np.uint8)
-        bg[glow_mask] = np.clip(bg[glow_mask].astype(np.int32) + glow_addition, 0, 255).astype(np.uint8)
-        
-        return bg.astype(np.uint8)
+        return bg
     
     def get_theme(self, theme_name):
         return self.themes.get(theme_name, self.golden_elegance)
 
-# ------------- EXTRA LARGE Text Animation System -------------
-class ExtraLargeTextAnimator:
-    def __init__(self):
-        self.animation_styles = {
-            "Typewriter Top-to-Bottom": self.typewriter_top_bottom,
-            "Smooth Reveal Top-to-Bottom": self.smooth_top_bottom,
-            "Line by Line": self.line_by_line,
-        }
-    
-    def typewriter_top_bottom(self, text, progress, line_info):
-        """Typewriter effect from top to bottom with EXTRA LARGE text"""
-        lines = line_info['lines']
-        total_lines = len(lines)
-        
-        lines_to_show = int(total_lines * progress)
-        
-        revealed_lines = []
-        for i in range(total_lines):
-            if i < lines_to_show:
-                revealed_lines.append(lines[i])
-            elif i == lines_to_show:
-                partial_progress = (progress * total_lines) - lines_to_show
-                chars_to_show = int(len(lines[i]) * partial_progress)
-                revealed_lines.append(lines[i][:chars_to_show])
-            else:
-                revealed_lines.append("")
-        
-        revealed_text = "\n".join(revealed_lines)
-        return revealed_text, progress
-    
-    def smooth_top_bottom(self, text, progress, line_info):
-        """Smooth reveal from top to bottom with EXTRA LARGE text"""
-        lines = line_info['lines']
-        total_lines = len(lines)
-        
-        exact_lines = progress * total_lines
-        lines_to_show = int(exact_lines)
-        partial_progress = exact_lines - lines_to_show
-        
-        revealed_lines = []
-        for i in range(total_lines):
-            if i < lines_to_show:
-                revealed_lines.append(lines[i])
-            elif i == lines_to_show:
-                chars_to_show = int(len(lines[i]) * partial_progress)
-                revealed_lines.append(lines[i][:chars_to_show])
-            else:
-                revealed_lines.append("")
-        
-        revealed_text = "\n".join(revealed_lines)
-        return revealed_text, progress
-    
-    def line_by_line(self, text, progress, line_info):
-        """Each line appears completely one after another"""
-        lines = line_info['lines']
-        total_lines = len(lines)
-        
-        # More dramatic line-by-line appearance
-        lines_to_show = int(total_lines * progress)
-        
-        revealed_lines = []
-        for i in range(total_lines):
-            if i <= lines_to_show:
-                revealed_lines.append(lines[i])
-            else:
-                revealed_lines.append("")
-        
-        revealed_text = "\n".join(revealed_lines)
-        return revealed_text, progress
-
-# ------------- EXTRA LARGE Text Layout System -------------
-class ExtraLargeTextLayout:
-    def __init__(self, width, height, margins=50):
+# ------------- RESPONSIVE Text Layout System -------------
+class ResponsiveTextLayout:
+    def __init__(self, width, height, margins=80):
         self.width = width
         self.height = height
         self.margins = margins
         self.content_width = width - 2 * margins
         self.content_height = height - 2 * margins
         
-    def calculate_optimal_layout(self, text, style_config):
-        """Calculate EXTRA LARGE font sizes"""
+    def calculate_responsive_font_size(self, text):
+        """Calculate font size based on BOTH screen dimensions AND text length"""
         text_length = len(text)
         
-        # EXTRA LARGE font sizing
-        if text_length < 30:
-            font_size = 140  # Very large for short text
-        elif text_length < 60:
-            font_size = 120  # Large for medium text
-        elif text_length < 100:
-            font_size = 100  # Still very large
+        # Base size from screen dimensions (responsive)
+        base_size_from_screen = min(
+            self.height / 12,  # 1080px / 12 = 90px
+            self.width / 8     # 720px / 8 = 90px
+        )
+        
+        # Adjust for text length
+        if text_length < 20:
+            font_size = base_size_from_screen * 1.6   # ~144px for short text
+        elif text_length < 40:
+            font_size = base_size_from_screen * 1.3   # ~117px
+        elif text_length < 80:
+            font_size = base_size_from_screen * 1.0   # ~90px
+        elif text_length < 120:
+            font_size = base_size_from_screen * 0.8   # ~72px
         else:
-            font_size = max(70, 90 - text_length // 25)  # Minimum 70px
+            font_size = base_size_from_screen * 0.7   # ~63px
         
-        # Try to load font
-        try:
-            font = ImageFont.truetype("Arial.ttf", font_size)
-        except:
-            try:
-                font = ImageFont.truetype("arial.ttf", font_size)
-            except:
-                try:
-                    font = ImageFont.truetype("Arial", font_size)
-                except:
-                    font = ImageFont.load_default()
+        # Ensure reasonable bounds
+        font_size = max(50, min(160, font_size))
         
-        return font, font_size
+        return int(font_size)
     
     def break_text_into_lines(self, text, font, max_width):
-        """Break text into lines for EXTRA LARGE text"""
+        """Break text into lines that fit the width"""
         words = text.split()
         lines = []
         current_line = []
@@ -318,12 +204,12 @@ class ExtraLargeTextLayout:
                 bbox = draw.textbbox((0, 0), test_line, font=font)
                 line_width = bbox[2] - bbox[0]
             except:
-                line_width = len(test_line) * font.size // 1.5  # Adjusted for extra large text
+                line_width = len(test_line) * font.size // 1.8
             
             if line_width > max_width:
                 if len(current_line) == 1:
-                    # Single word is too long, break it
-                    if len(word) > 12:
+                    # Single word too long - break it
+                    if len(word) > 15:
                         parts = [word[i:i+12] for i in range(0, len(word), 12)]
                         lines.extend(parts[:-1])
                         current_line = [parts[-1]]
@@ -340,45 +226,97 @@ class ExtraLargeTextLayout:
             lines.append(' '.join(current_line))
         
         return lines
-    
-    def calculate_text_block_position(self, lines, font, line_height, start_from_top=True):
-        """Calculate position starting from TOP with extra space"""
-        total_height = len(lines) * line_height
-        
-        if start_from_top:
-            # Start from top with generous spacing
-            start_y = self.margins + 80
-        else:
-            start_y = self.margins + (self.content_height - total_height) // 2
-        
-        return start_y
 
-# ------------- Frame Generator with EXTRA LARGE TEXT -------------
-class ExtraLargeTextFrameGenerator:
+# ------------- Top-to-Bottom Animation System -------------
+class TopToBottomAnimator:
     def __init__(self):
-        self.bg_generator = AdvancedBackgroundGenerator()
-        self.text_animator = ExtraLargeTextAnimator()
+        self.styles = {
+            "Typewriter Top-to-Bottom": self.typewriter_effect,
+            "Smooth Line-by-Line": self.smooth_line_effect,
+        }
     
-    def create_frame_with_extra_large_text(self, full_text, progress, frame_idx, total_frames, 
-                                         width, height, style_config):
-        """Create frame with EXTRA LARGE text and top-to-bottom animation"""
+    def typewriter_effect(self, text, progress, line_info):
+        """Text appears from top to bottom, line by line"""
+        lines = line_info['lines']
+        total_lines = len(lines)
+        
+        lines_to_show = int(total_lines * progress)
+        partial_progress = (progress * total_lines) - lines_to_show
+        
+        revealed_lines = []
+        for i in range(total_lines):
+            if i < lines_to_show:
+                revealed_lines.append(lines[i])
+            elif i == lines_to_show:
+                chars_to_show = int(len(lines[i]) * partial_progress)
+                revealed_lines.append(lines[i][:chars_to_show])
+            else:
+                revealed_lines.append("")
+        
+        return "\n".join(revealed_lines), progress
+    
+    def smooth_line_effect(self, text, progress, line_info):
+        """Each line appears completely in sequence"""
+        lines = line_info['lines']
+        total_lines = len(lines)
+        
+        # More distinct line appearances
+        line_progress = progress * total_lines
+        current_line = int(line_progress)
+        
+        revealed_lines = []
+        for i in range(total_lines):
+            if i < current_line:
+                revealed_lines.append(lines[i])
+            elif i == current_line:
+                # Current line appears gradually
+                line_portion = line_progress - current_line
+                chars_to_show = int(len(lines[i]) * line_portion)
+                revealed_lines.append(lines[i][:chars_to_show])
+            else:
+                revealed_lines.append("")
+        
+        return "\n".join(revealed_lines), progress
+
+# ------------- FIXED Frame Generator -------------
+class StableFrameGenerator:
+    def __init__(self):
+        self.bg_generator = StableBackgroundGenerator()
+        self.text_animator = TopToBottomAnimator()
+        self.logo = load_logo()
+    
+    def create_stable_frame(self, full_text, progress, frame_idx, total_frames, 
+                          width, height, style_config):
+        """Create frame with guaranteed consistent dimensions"""
         try:
+            # Generate background with exact dimensions
             bg_theme = self.bg_generator.get_theme(style_config['background_theme'])
             time_progress = frame_idx / total_frames
             bg = bg_theme(width, height, time_progress)
             
-            if bg.dtype != np.uint8:
-                bg = bg.astype(np.uint8)
-                
+            # Convert to PIL Image
             img = Image.fromarray(bg)
             draw = ImageDraw.Draw(img)
             
-            layout_engine = ExtraLargeTextLayout(width, height)
-            font, font_size = layout_engine.calculate_optimal_layout(full_text, style_config)
+            # Add logo to top left
+            if self.logo:
+                logo_position = (30, 30)  # Top left with some margin
+                img.paste(self.logo, logo_position, self.logo)
             
-            lines = layout_engine.break_text_into_lines(
-                full_text, font, layout_engine.content_width
-            )
+            # Calculate responsive layout
+            layout = ResponsiveTextLayout(width, height)
+            font_size = layout.calculate_responsive_font_size(full_text)
+            
+            try:
+                font = ImageFont.truetype("Arial.ttf", font_size)
+            except:
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except:
+                    font = ImageFont.load_default()
+            
+            # Break text into lines
+            lines = layout.break_text_into_lines(full_text, font, layout.content_width)
             
             line_info = {
                 'lines': lines,
@@ -386,25 +324,26 @@ class ExtraLargeTextFrameGenerator:
                 'font_size': font_size
             }
             
-            animator = self.text_animator.animation_styles[style_config['animation_style']]
+            # Apply animation
+            animator = self.text_animator.styles[style_config['animation_style']]
             visible_text, anim_progress = animator(full_text, progress, line_info)
             
-            # Calculate positioning with extra spacing for large text
+            # Calculate line height and start position
             try:
                 bbox = draw.textbbox((0, 0), "Test", font=font)
                 line_height = (bbox[3] - bbox[1]) * style_config['line_spacing']
             except:
-                line_height = font_size * style_config['line_spacing'] * 1.5  # Extra spacing
+                line_height = font_size * style_config['line_spacing'] * 1.4
+            
+            # Start from top (below logo)
+            start_y = 120  # Below logo area
             
             visible_lines = visible_text.split('\n') if visible_text else []
-            start_y = layout_engine.calculate_text_block_position(
-                visible_lines, font, line_height, start_from_top=True
-            )
             
+            # Draw text
             text_color = self.hex_to_rgb(style_config['text_color'])
             shadow_color = self.hex_to_rgb(style_config['shadow_color'])
             
-            # Draw EXTRA LARGE text with enhanced effects
             for i, line in enumerate(visible_lines):
                 if not line.strip():
                     continue
@@ -415,28 +354,31 @@ class ExtraLargeTextFrameGenerator:
                     bbox = draw.textbbox((0, 0), line, font=font)
                     line_width = bbox[2] - bbox[0]
                 except:
-                    line_width = len(line) * font_size // 1.5
+                    line_width = len(line) * font_size // 1.8
                 
                 x_pos = (width - line_width) // 2
                 
-                # Enhanced shadow for extra large text
-                shadow_blur = 5
-                for dx, dy in [(shadow_blur, shadow_blur), (0, shadow_blur), (shadow_blur, 0), (-shadow_blur, 0)]:
-                    draw.text((x_pos + dx, y_pos + dy), line, font=font, fill=shadow_color)
+                # Text shadow
+                shadow_blur = 3
+                draw.text((x_pos + shadow_blur, y_pos + shadow_blur), line, font=font, fill=shadow_color)
                 
                 # Main text
                 draw.text((x_pos, y_pos), line, font=font, fill=text_color)
             
+            # Convert back to numpy with guaranteed dimensions
             frame_array = np.array(img)
-            if frame_array.dtype != np.uint8:
-                frame_array = frame_array.astype(np.uint8)
-                
-            return frame_array
+            if frame_array.shape != (height, width, 3):
+                # Force correct dimensions if needed
+                frame_array = np.zeros((height, width, 3), dtype=np.uint8)
+                frame_array[:] = [50, 50, 50]  # Fallback color
+            
+            return frame_array.astype(np.uint8)
             
         except Exception as e:
-            st.warning(f"Frame generation: {e}")
+            # Guaranteed fallback frame
+            st.warning(f"Frame generation issue: {e}")
             fallback_frame = np.zeros((height, width, 3), dtype=np.uint8)
-            fallback_frame[:, :] = [50, 50, 50]
+            fallback_frame[:, :] = [30, 30, 60]  # Dark blue fallback
             return fallback_frame
     
     def hex_to_rgb(self, hex_color):
@@ -444,57 +386,31 @@ class ExtraLargeTextFrameGenerator:
         hex_color = hex_color.lstrip('#')
         return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
-# ------------- Groq AI Integration -------------
-class GroqAIHelper:
+# ------------- Groq DIY Content Generator -------------
+class GroqDIYGenerator:
     def __init__(self, api_key):
         self.api_key = api_key
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
     
-    def generate_text_suggestions(self, prompt, max_tokens=100):
-        """Generate text suggestions using Groq AI"""
+    def generate_diy_content(self, topic, content_type="tips"):
+        """Generate DIY tips, hashtags, or captions"""
+        prompts = {
+            "tips": f"Generate 3 practical DIY tips for: {topic}. Make them actionable and easy to follow. Keep each tip under 100 characters.",
+            "hashtags": f"Generate 10 relevant hashtags for DIY projects about: {topic}. Include both popular and niche hashtags.",
+            "captions": f"Write 2 engaging social media captions for DIY content about: {topic}. Make them inspiring and under 120 characters each."
+        }
+        
+        prompt = prompts.get(content_type, prompts["tips"])
+        
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         
         payload = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"Generate a short, impactful text for a video animation (max 150 characters) about: {prompt}"
-                }
-            ],
-            "model": "llama-3.1-8b-instant",  # You can change this model
-            "max_tokens": max_tokens,
-            "temperature": 0.7
-        }
-        
-        try:
-            response = requests.post(self.base_url, json=payload, headers=headers)
-            if response.status_code == 200:
-                result = response.json()
-                return result['choices'][0]['message']['content'].strip()
-            else:
-                return f"Error: {response.status_code}"
-        except Exception as e:
-            return f"AI service error: {str(e)}"
-    
-    def enhance_text(self, text):
-        """Enhance existing text using AI"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"Make this text more impactful and engaging for a video (keep under 200 characters): '{text}'"
-                }
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "model": "llama-3.1-8b-instant",
-            "max_tokens": 150,
+            "max_tokens": 300,
             "temperature": 0.7
         }
         
@@ -504,48 +420,57 @@ class GroqAIHelper:
                 result = response.json()
                 return result['choices'][0]['message']['content'].strip()
             else:
-                return text  # Return original if error
-        except:
-            return text  # Return original if error
+                return f"API Error: {response.status_code}"
+        except Exception as e:
+            return f"Connection error: {str(e)}"
+    
+    def generate_complete_diy_kit(self, topic):
+        """Generate complete DIY content package"""
+        results = {}
+        for content_type in ["tips", "hashtags", "captions"]:
+            results[content_type] = self.generate_diy_content(topic, content_type)
+        return results
 
 # ------------- Video Generation -------------
-def generate_extra_large_text_video(sentence, duration, width, height, style_config, output_path):
-    """Generate video with EXTRA LARGE text"""
+def generate_stable_video(sentence, duration, width, height, style_config, output_path):
+    """Generate video with guaranteed stability"""
     fps = 24
     total_frames = duration * fps
     
-    frame_generator = ExtraLargeTextFrameGenerator()
+    frame_generator = StableFrameGenerator()
     
     try:
         with imageio.get_writer(
             output_path, 
             fps=fps, 
             codec="libx264",
-            quality=8,
-            pixelformat="yuv420p",
-            macro_block_size=8
+            quality=7,
+            pixelformat="yuv420p"
         ) as writer:
             
             for frame_idx in range(total_frames):
                 progress = (frame_idx + 1) / total_frames
                 
-                frame = frame_generator.create_frame_with_extra_large_text(
+                frame = frame_generator.create_stable_frame(
                     sentence, progress, frame_idx, total_frames, 
                     width, height, style_config
                 )
                 
+                # Ensure frame is correct type and dimensions
                 if frame.dtype != np.uint8:
                     frame = frame.astype(np.uint8)
+                if frame.shape != (height, width, 3):
+                    frame = np.zeros((height, width, 3), dtype=np.uint8)
                 
                 writer.append_data(frame)
                 
-                if frame_idx % 8 == 0:
+                if frame_idx % 10 == 0:
                     yield frame_idx / total_frames
         
         yield 1.0
         
     except Exception as e:
-        st.error(f"Video generation error: {e}")
+        st.error(f"Video writing error: {e}")
         yield 1.0
 
 def get_video_html(video_path):
@@ -571,93 +496,120 @@ def main():
     # Display logo
     st.markdown('<div class="logo-container">', unsafe_allow_html=True)
     logo_image = load_logo()
-    if logo_image:
-        st.image(logo_image, width=200)
+    if logo_image and hasattr(logo_image, 'size'):
+        # Resize for display
+        display_logo = logo_image.resize((200, 100), Image.Resampling.LANCZOS)
+        st.image(display_logo, width=200)
     st.markdown('</div>', unsafe_allow_html=True)
     
     with st.container():
         st.markdown('<div class="glass">', unsafe_allow_html=True)
-        st.markdown("<h1 style='text-align:center;color:#ffffff'>🎬 Premium Text Animations</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align:center;color:#ffffff'>🎬 DIY Content Creator</h1>", unsafe_allow_html=True)
         
-        # Groq AI Section
+        # Groq DIY Assistant Section
         if GROQ_API_KEY and GROQ_API_KEY != "your_groq_api_key_here":
-            with st.expander("🤖 AI Text Assistant (Powered by Groq)", expanded=False):
-                col1, col2 = st.columns(2)
-                with col1:
-                    ai_prompt = st.text_input("Describe what you want to say:", placeholder="e.g., motivational quote about success")
-                    if st.button("✨ Generate Text", key="ai_generate"):
-                        if ai_prompt:
-                            with st.spinner("AI is generating your text..."):
-                                groq_helper = GroqAIHelper(GROQ_API_KEY)
-                                generated_text = groq_helper.generate_text_suggestions(ai_prompt)
-                                st.session_state.generated_text = generated_text
+            st.markdown('<div class="diy-section">', unsafe_allow_html=True)
+            st.markdown("### 🤖 DIY Content Assistant")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                diy_topic = st.text_input(
+                    "DIY Topic:",
+                    placeholder="e.g., home organization, woodworking, gardening",
+                    key="diy_topic"
+                )
                 
-                with col2:
-                    if 'generated_text' in st.session_state:
-                        st.text_area("AI Generated Text:", st.session_state.generated_text, height=100)
-                        if st.button("🚀 Use This Text"):
-                            st.session_state.use_ai_text = True
+                content_type = st.selectbox(
+                    "Content Type:",
+                    ["tips", "hashtags", "captions", "complete kit"],
+                    key="content_type"
+                )
+                
+                if st.button("🛠️ Generate DIY Content", key="generate_diy"):
+                    if diy_topic:
+                        with st.spinner("Creating your DIY content..."):
+                            diy_generator = GroqDIYGenerator(GROQ_API_KEY)
+                            
+                            if content_type == "complete kit":
+                                results = diy_generator.generate_complete_diy_kit(diy_topic)
+                                st.session_state.diy_results = results
+                            else:
+                                result = diy_generator.generate_diy_content(diy_topic, content_type)
+                                st.session_state.diy_results = {content_type: result}
+            
+            with col2:
+                if 'diy_results' in st.session_state:
+                    st.markdown("### 📋 Generated Content")
+                    
+                    if 'tips' in st.session_state.diy_results:
+                        st.text_area("DIY Tips:", st.session_state.diy_results['tips'], height=100)
+                    
+                    if 'hashtags' in st.session_state.diy_results:
+                        st.text_area("Hashtags:", st.session_state.diy_results['hashtags'], height=80)
+                    
+                    if 'captions' in st.session_state.diy_results:
+                        st.text_area("Social Captions:", st.session_state.diy_results['captions'], height=100)
+                    
+                    if st.button("🎬 Use for Animation"):
+                        # Use the first available content for animation
+                        for content_type, content in st.session_state.diy_results.items():
+                            if content and "Error" not in content:
+                                # Take first line or first 150 chars
+                                lines = content.split('\n')
+                                usable_text = lines[0] if lines else content[:150]
+                                st.session_state.diy_animation_text = usable_text
+                                st.success("Content ready for animation!")
+                                break
+            
+            st.markdown('</div>', unsafe_allow_html=True)
         
-        # Configuration
-        with st.expander("🎨 Style Configuration", expanded=True):
+        # Animation Configuration
+        with st.expander("🎨 Animation Settings", expanded=True):
             col1, col2, col3 = st.columns(3)
             
             with col1:
                 background_theme = st.selectbox(
                     "Background Theme",
-                    ["Golden Elegance", "Deep Amber", "Vintage Sepia", "Royal Bronze", "Sunset Gold"]
+                    ["Golden Elegance", "Deep Amber", "Vintage Sepia"]
                 )
                 
                 animation_style = st.selectbox(
                     "Animation Style",
-                    ["Typewriter Top-to-Bottom", "Smooth Reveal Top-to-Bottom", "Line by Line"]
+                    ["Typewriter Top-to-Bottom", "Smooth Line-by-Line"]
                 )
             
             with col2:
                 text_color = st.color_picker("Text Color", "#FFD700")
                 shadow_color = st.color_picker("Shadow Color", "#8B4513")
                 
-                line_spacing = st.slider("Line Spacing", 1.4, 2.5, 1.8, 0.1)
+                line_spacing = st.slider("Line Spacing", 1.3, 2.2, 1.6, 0.1)
             
             with col3:
-                duration = st.slider("Duration (seconds)", 3, 10, 6)
+                duration = st.slider("Duration (seconds)", 3, 8, 5)
                 resolution = st.selectbox("Resolution", ["720x1280", "1080x1920"], index=1)
         
-        with st.expander("📝 Text Configuration", expanded=True):
-            # Use AI generated text if available
-            default_text = "WELCOME TO PREMIUM TEXT ANIMATIONS! THIS TEXT IS EXTRA LARGE AND CLEAR, ANIMATING SMOOTHLY FROM TOP TO BOTTOM WITH STUNNING VISUAL EFFECTS."
+        # Text Input
+        with st.expander("📝 Animation Text", expanded=True):
+            # Use DIY content if available
+            default_text = "CREATE AMAZING DIY PROJECTS! SHARE YOUR CREATIONS WITH THE WORLD USING THESE SIMPLE TIPS AND TRICKS."
             
-            if 'use_ai_text' in st.session_state and st.session_state.use_ai_text:
-                default_text = st.session_state.generated_text
-                st.session_state.use_ai_text = False  # Reset after use
+            if 'diy_animation_text' in st.session_state:
+                default_text = st.session_state.diy_animation_text
+                # Clear after use
+                del st.session_state.diy_animation_text
             
             sentence = st.text_area(
                 "Your Text:",
                 default_text,
-                height=120,
-                max_chars=250,
-                help="Text will be displayed in EXTRA LARGE font size (70px-140px) and animate from top to bottom"
+                height=100,
+                max_chars=200,
+                help="Text will animate from top to bottom with your logo"
             )
-            
-            if GROQ_API_KEY and GROQ_API_KEY != "your_groq_api_key_here":
-                if st.button("🪄 Enhance with AI", key="enhance"):
-                    if sentence:
-                        with st.spinner("AI is enhancing your text..."):
-                            groq_helper = GroqAIHelper(GROQ_API_KEY)
-                            enhanced_text = groq_helper.enhance_text(sentence)
-                            st.session_state.enhanced_text = enhanced_text
-                            st.rerun()
-                
-                if 'enhanced_text' in st.session_state:
-                    st.text_area("AI Enhanced Text:", st.session_state.enhanced_text, height=100)
-                    if st.button("✅ Use Enhanced Text"):
-                        sentence = st.session_state.enhanced_text
-                        del st.session_state.enhanced_text
             
             if sentence:
                 chars_count = len(sentence)
-                estimated_lines = max(1, chars_count // 20)  # Fewer chars per line for extra large text
-                st.caption(f"Characters: {chars_count}/250 • Estimated lines: {estimated_lines} • Font size: 70px-140px")
+                st.caption(f"Characters: {chars_count}/200 • Font size: 50px-160px (responsive)")
         
         resolution_map = {"720x1280": (720, 1280), "1080x1920": (1080, 1920)}
         W, H = resolution_map[resolution]
@@ -670,33 +622,33 @@ def main():
             'line_spacing': line_spacing,
         }
         
-        if st.button("🎬 Generate Premium Animation", type="primary", use_container_width=True):
+        if st.button("🎬 Create Animation", type="primary", use_container_width=True):
             if not sentence.strip():
                 st.warning("Please enter some text.")
                 return
             
-            with st.spinner("Creating your PREMIUM animation..."):
+            with st.spinner("Creating your branded animation..."):
                 tmpdir = Path(tempfile.mkdtemp())
-                out_mp4 = tmpdir / "premium_animation.mp4"
+                out_mp4 = tmpdir / "diy_animation.mp4"
                 
                 try:
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    status_text.text("🎨 Setting up premium animation...")
+                    status_text.text("🔄 Setting up animation...")
                     
-                    for progress in generate_extra_large_text_video(sentence, duration, W, H, style_config, out_mp4):
+                    for progress in generate_stable_video(sentence, duration, W, H, style_config, out_mp4):
                         progress_bar.progress(progress)
                         if progress < 1.0:
-                            status_text.text(f"🎬 Creating EXTRA LARGE text... {int(progress * 100)}%")
+                            status_text.text(f"🎬 Animating top-to-bottom... {int(progress * 100)}%")
                         else:
-                            status_text.text("✅ Finalizing premium video...")
+                            status_text.text("✅ Finalizing video...")
                     
                     st.session_state.generated_video_path = out_mp4
                     st.session_state.show_video = True
                     st.session_state.video_tmpdir = tmpdir
                     
-                    st.success("✨ PREMIUM animation created successfully!")
+                    st.success("✨ Branded animation created successfully!")
                     
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
@@ -711,7 +663,7 @@ def main():
             if (hasattr(st.session_state, 'generated_video_path') and 
                 st.session_state.generated_video_path.exists()):
                 
-                st.markdown("### 🎥 Your Premium Animation")
+                st.markdown("### 🎥 Your Branded Animation")
                 
                 video_html = get_video_html(st.session_state.generated_video_path)
                 st.markdown(video_html, unsafe_allow_html=True)
@@ -722,7 +674,7 @@ def main():
                         st.download_button(
                             label="⬇️ Download MP4", 
                             data=f, 
-                            file_name="premium_animation.mp4", 
+                            file_name="diy_content_animation.mp4", 
                             mime="video/mp4",
                             type="primary",
                             use_container_width=True
@@ -740,42 +692,42 @@ def main():
         
         # Features
         st.markdown("---")
-        st.markdown("### 🎯 Premium Features")
+        st.markdown("### 🎯 What's Included")
         
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("""
             <div class='feature-card'>
-            <h4>📏 EXTRA LARGE TEXT</h4>
-            <p>Massive text sizes (70px-140px) for maximum impact</p>
+            <h4>🏷️ Branded Logo</h4>
+            <p>Your logo appears in every video frame</p>
             </div>
             
             <div class='feature-card'>
-            <h4>⬇️ TOP-TO-BOTTOM ANIMATION</h4>
+            <h4>⬇️ Top-to-Bottom Animation</h4>
             <p>Text flows smoothly from top to bottom</p>
             </div>
             
             <div class='feature-card'>
-            <h4>🤖 AI POWERED</h4>
-            <p>Groq AI integration for text generation and enhancement</p>
+            <h4>📏 Responsive Text Sizing</h4>
+            <p>Font size adjusts to screen size and text length</p>
             </div>
             """, unsafe_allow_html=True)
         
         with col2:
             st.markdown("""
             <div class='feature-card'>
-            <h4>🎨 5 PREMIUM THEMES</h4>
-            <p>Professional brown/gold animated backgrounds</p>
+            <h4>🤖 AI DIY Assistant</h4>
+            <p>Generate tips, hashtags, and captions with Groq</p>
             </div>
             
             <div class='feature-card'>
-            <h4>🌈 CUSTOM COLORS</h4>
-            <p>Full control over text and shadow colors</p>
+            <h4>🎨 Custom Themes</h4>
+            <p>Choose from multiple background themes</p>
             </div>
             
             <div class='feature-card'>
-            <h4>⚡ HIGH PERFORMANCE</h4>
-            <p>Optimized for fast generation and smooth playback</p>
+            <h4>⚡ Stable Generation</h4>
+            <p>Reliable video creation every time</p>
             </div>
             """, unsafe_allow_html=True)
         
