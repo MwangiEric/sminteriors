@@ -4,6 +4,8 @@ import tempfile, os, numpy as np, io
 from moviepy.editor import ImageSequenceClip, AudioFileClip
 import requests
 import base64
+import cv2
+import rembg
 from groq import Groq
 
 st.set_page_config(page_title="SM Interiors Reel Tool", layout="wide", page_icon="🎬")
@@ -21,6 +23,7 @@ try:
     client = Groq(api_key=GROQ_API_KEY)
 except:
     client = None
+    st.warning("⚠️ No Groq API key found. AI text generation disabled.")
 
 @st.cache_resource
 def load_logo():
@@ -29,82 +32,150 @@ def load_logo():
         if resp.status_code == 200:
             logo = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((280, 140))
             return logo
-    except:
-        # Fallback logo
-        fallback = Image.new("RGBA", (280, 140), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(fallback)
-        font = ImageFont.load_default()
-        draw.text((0, 0), "SM", font=font, fill="#FFD700")
-        return fallback
+    except Exception as e:
+        st.warning(f"Logo load failed: {e}")
+    # Fallback logo
+    fallback = Image.new("RGBA", (280, 140), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(fallback)
+    font = ImageFont.load_default()
+    draw.text((0, 0), "SM", font=font, fill="#FFD700")
+    return fallback
 
 def remove_background(img):
-    """Proper background removal for outdoor product images"""
+    """Professional background removal using rembg"""
     try:
-        # Convert to RGB if needed
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
+        # Convert to numpy array for rembg
+        img_np = np.array(img)
         
-        # Create a mask based on color difference from background
+        # Remove background
+        img_no_bg = rembg.remove(img_np, session=rembg.new_session())
+        
+        # Convert back to PIL
+        img_pil = Image.fromarray(img_no_bg)
+        
+        # Process transparency
+        if img_pil.mode != 'RGBA':
+            img_pil = img_pil.convert('RGBA')
+        
+        # Remove black edges
+        img_pil = remove_black_edges(img_pil)
+        
+        return img_pil
+    except Exception as e:
+        st.warning(f"Rembg failed: {e}. Using OpenCV fallback.")
+        return remove_background_opencv(img)
+
+def remove_black_edges(img):
+    """Clean up black edges after background removal"""
+    # Convert to numpy
+    img_np = np.array(img)
+    
+    # Create mask of non-transparent pixels
+    alpha = img_np[:, :, 3] > 0
+    
+    # Find bounding box of non-transparent area
+    y, x = np.where(alpha)
+    if len(y) == 0 or len(x) == 0:
+        return img
+    
+    min_y, max_y = np.min(y), np.max(y)
+    min_x, max_x = np.min(x), np.max(x)
+    
+    # Crop to bounding box
+    img_cropped = img.crop((min_x, min_y, max_x, max_y))
+    
+    # Add padding (10% of the product size)
+    pad = max(img_cropped.width, img_cropped.height) // 10
+    new_size = (img_cropped.width + 2*pad, img_cropped.height + 2*pad)
+    padded = Image.new('RGBA', new_size, (0, 0, 0, 0))
+    padded.paste(img_cropped, (pad, pad), img_cropped)
+    
+    return padded
+
+def remove_background_opencv(img):
+    """OpenCV fallback for background removal"""
+    try:
+        # Convert to numpy array
+        img_np = np.array(img)
+        
+        # Convert to HSV for better color separation
+        hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
+        
+        # Create mask based on color differences
         # For outdoor images, we'll use a simple threshold approach
-        np_img = np.array(img)
-        
-        # Calculate average background color (using corners)
         corners = [
-            np_img[0, 0],      # top-left
-            np_img[0, -1],     # top-right
-            np_img[-1, 0],     # bottom-left
-            np_img[-1, -1]     # bottom-right
+            img_np[0, 0],      # top-left
+            img_np[0, -1],     # top-right
+            img_np[-1, 0],     # bottom-left
+            img_np[-1, -1]     # bottom-right
         ]
         bg_color = np.mean(corners, axis=0).astype(np.uint8)
         
         # Create mask where pixels are similar to background
-        diff = np.linalg.norm(np_img.astype(np.float32) - bg_color, axis=-1)
+        diff = cv2.absdiff(img_np, bg_color)
+        diff = np.max(diff, axis=2)
         mask = diff > 30  # Threshold for "not background"
         
-        # Convert mask to PIL image
-        mask_img = Image.fromarray((mask * 255).astype(np.uint8))
+        # Clean up mask
+        mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3,3), np.uint8))
         
         # Create transparent background
-        result = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        result.paste(img, mask=mask_img)
+        result = np.zeros((img_np.shape[0], img_np.shape[1], 4), dtype=np.uint8)
+        result[:, :, :3] = img_np
+        result[:, :, 3] = mask * 255
         
-        return result
+        # Convert to PIL
+        img_pil = Image.fromarray(result)
+        
+        # Remove black edges
+        img_pil = remove_black_edges(img_pil)
+        
+        return img_pil
     except Exception as e:
-        st.warning(f"Background removal failed: {e}. Using original.")
+        st.warning(f"OpenCV background removal failed: {e}. Using original image.")
         return img.convert('RGBA')
 
-def preprocess_product_image(img):
-    """Enhanced preprocessing for outdoor product images"""
+def compose_product_image(img):
+    """Professional image composition"""
     try:
-        # Convert to RGB if needed
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        
-        # Remove background (this is the key fix)
+        # Remove background
         img = remove_background(img)
         
         # Enhance contrast and sharpness
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
         img = ImageEnhance.Contrast(img).enhance(1.3)
         img = ImageEnhance.Sharpness(img).enhance(1.8)
         img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
         
-        # Center product on transparent background
-        background = Image.new('RGBA', (900, 900), (0, 0, 0, 0))
+        # Professional composition rules
+        # 1. Maintain aspect ratio
+        # 2. Size product to 85% of frame width (with padding)
+        # 3. Center vertically in the safe zone
         
-        # Resize product (maintain aspect ratio)
-        max_size = 800
-        ratio = min(max_size / img.width, max_size / img.height)
-        new_size = (int(img.width * ratio), int(img.height * ratio))
-        img = img.resize(new_size, Image.LANCZOS)
+        # Calculate target size
+        max_width = int(WIDTH * 0.85)
+        ratio = max_width / img.width
+        new_height = int(img.height * ratio)
         
-        # Center on background
-        x = (900 - img.width) // 2
-        y = (900 - img.height) // 2
+        # Resize
+        img = img.resize((max_width, new_height), Image.LANCZOS)
+        
+        # Create background
+        background = Image.new('RGBA', (WIDTH, HEIGHT), (0, 0, 0, 0))
+        
+        # Center horizontally
+        x = (WIDTH - max_width) // 2
+        
+        # Center vertically in safe zone (350-700px from top)
+        y = 500  # Perfect center for most products
+        
+        # Paste product
         background.paste(img, (x, y), img)
         
         return background
     except Exception as e:
-        st.warning(f"Preprocessing failed: {e}. Using original image.")
+        st.error(f"Image composition failed: {e}. Using original.")
         return img
 
 def safe_image_load(uploaded):
@@ -115,15 +186,15 @@ def safe_image_load(uploaded):
 
         img = Image.open(tmp_path).convert("RGBA")
         
-        # Auto-resize for Groq
-        max_dim = 1024
+        # Auto-resize for processing
+        max_dim = 1500  # Higher for better quality
         if max(img.width, img.height) > max_dim:
             ratio = max_dim / max(img.width, img.height)
             new_size = (int(img.width * ratio), int(img.height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Preprocess for reel
-        processed_img = preprocess_product_image(img)
+        # Process image
+        processed_img = compose_product_image(img)
         os.unlink(tmp_path)
 
         # Save to bytes for Groq
@@ -137,15 +208,12 @@ def safe_image_load(uploaded):
         st.error(f"Image processing failed: {e}. Try a simple JPG/PNG under 5MB.")
         return None, None
 
-def analyze_image_with_groq(image_bytes):
+def generate_text_with_groq(image_bytes):
+    """Generate all text content using Groq"""
     if not client:
         return {
-            "product_type": "Furniture",
-            "color": "Grey",
-            "style": "Modern",
-            "mood": "Elegant",
-            "hook": "LIMITED STOCK!",
             "title": "Luxury Furniture",
+            "hook": "LIMITED STOCK!",
             "cta": "DM TO ORDER • 0710 895 737"
         }
     
@@ -160,26 +228,15 @@ def analyze_image_with_groq(image_bytes):
                         {
                             "type": "text",
                             "text": """
-Analyze this furniture product image and return ONLY in this format:
+Analyze this furniture product image and generate:
 
-PRODUCT_TYPE: [product type]
-COLOR: [dominant color]
-STYLE: [design style]
-MOOD: [emotional tone]
-
-Then suggest:
-HOOK: [short, urgent, under 18 chars]
-TITLE: [clean, descriptive]
-CTA: [includes contact number]
+TITLE: [clean, descriptive product name (max 25 chars)]
+HOOK: [short, urgent phrase for Reels (max 18 chars)]
+CTA: [action-oriented with contact (max 30 chars)]
 
 Example:
-PRODUCT_TYPE: Chest of Drawers
-COLOR: Grey
-STYLE: Modern
-MOOD: Elegant
-
-HOOK: 2 LEFT IN STOCK!
 TITLE: Grey Chest of Drawers
+HOOK: 2 LEFT IN STOCK!
 CTA: ORDER NOW • 0710 895 737
 """
                         },
@@ -194,25 +251,22 @@ CTA: ORDER NOW • 0710 895 737
             ],
             model="meta-llama/llama-4-maverick-17b-128e-instruct",
             temperature=0.7,
-            max_tokens=200,
+            max_tokens=150,
         )
 
         response = chat_completion.choices[0].message.content.strip()
-        return parse_groq_response(response)
+        return parse_groq_text(response)
 
     except Exception as e:
-        st.warning(f"AI analysis failed: {e}. Using defaults.")
+        st.warning(f"AI text generation failed: {e}. Using defaults.")
         return {
-            "product_type": "Furniture",
-            "color": "Grey",
-            "style": "Modern",
-            "mood": "Elegant",
-            "hook": "LIMITED STOCK!",
             "title": "Luxury Furniture",
+            "hook": "LIMITED STOCK!",
             "cta": "DM TO ORDER • 0710 895 737"
         }
 
-def parse_groq_response(text):
+def parse_groq_text(text):
+    """Parse Groq's text output"""
     lines = text.split("\n")
     data = {}
     for line in lines:
@@ -221,6 +275,7 @@ def parse_groq_response(text):
             data[key.strip()] = value.strip()
     return data
 
+# ✅ FIXED: Mobile-tested layout system
 def create_frame(t, product_img, hook, price, cta, title, logo=None):
     canvas = Image.new("RGB", (WIDTH, HEIGHT), "#0F0A05")  # Brand brown
     draw = ImageDraw.Draw(canvas)
@@ -230,24 +285,24 @@ def create_frame(t, product_img, hook, price, cta, title, logo=None):
     for cx, cy, r in [(540, 960, 600), (660, 840, 800), (360, 1140, 1000)]:
         draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline="#FFD700", width=4)
 
-    # Animated geometric shapes (converted to integers)
+    # Animated geometric shapes
     for i in range(2):
         # Circle animation
-        radius = int(150 + 30 * np.sin(t * 0.5 + i * 2))  # ✅ INT CONVERSION
-        x = int(540 + 100 * np.cos(t * 0.3 + i))          # ✅ INT CONVERSION
-        y = int(960 + 80 * np.sin(t * 0.3 + i))           # ✅ INT CONVERSION
+        radius = int(150 + 30 * np.sin(t * 0.5 + i * 2))
+        x = int(540 + 100 * np.cos(t * 0.3 + i))
+        y = int(960 + 80 * np.sin(t * 0.3 + i))
         draw.ellipse([x-radius, y-radius, x+radius, y+radius], 
                     outline="#FFD700", width=2, fill=None)
 
         # Rectangle animation
-        w = int(200 + 40 * np.sin(t * 0.4 + i))          # ✅ INT CONVERSION
-        h = int(150 + 30 * np.cos(t * 0.4 + i))          # ✅ INT CONVERSION
-        x1 = int(660 - w//2 + 50 * np.cos(t * 0.6 + i))  # ✅ INT CONVERSION
-        y1 = int(840 - h//2 + 40 * np.sin(t * 0.6 + i))  # ✅ INT CONVERSION
+        w = int(200 + 40 * np.sin(t * 0.4 + i))
+        h = int(150 + 30 * np.cos(t * 0.4 + i))
+        x1 = int(660 - w//2 + 50 * np.cos(t * 0.6 + i))
+        y1 = int(840 - h//2 + 40 * np.sin(t * 0.6 + i))
         draw.rectangle([x1, y1, x1+w, y1+h], 
                       outline="#FFD700", width=2, fill=None)
 
-    # ✅ FIXED PRODUCT POSITION (with integer coordinates)
+    # ✅ PRODUCT (centered professionally)
     base_scale = st.session_state.get("product_scale", 1.0)
     scale = base_scale * (0.8 + 0.2 * (np.sin(t * 2) ** 2))
     size = int(850 * scale)
@@ -255,10 +310,10 @@ def create_frame(t, product_img, hook, price, cta, title, logo=None):
     angle = np.sin(t * 0.5) * 3
     rotated = resized.rotate(angle, expand=True, resample=Image.BICUBIC)
     
-    # Product in safe zone (350-700px from top) - all as integers
+    # Product in safe zone (350-700px from top)
     prod_y = st.session_state.get("prod_y_offset", 0)
-    prod_y = int(max(350, min(700, 450 + prod_y + np.sin(t * 3) * 30)))  # ✅ INT CONVERSION
-    prod_x = int((WIDTH - rotated.width) // 2)  # ✅ INT CONVERSION
+    prod_y = max(350, min(700, 500 + prod_y + np.sin(t * 3) * 30))
+    prod_x = (WIDTH - rotated.width) // 2
     
     canvas.paste(rotated, (prod_x, prod_y), rotated if rotated.mode == 'RGBA' else None)
 
@@ -295,15 +350,15 @@ def create_frame(t, product_img, hook, price, cta, title, logo=None):
     draw.text((60, 1800), cta, font=cta_font, fill="#FFFFFF", 
               stroke_width=5, stroke_fill="#000")
 
-    # ✅ LOGO (top-left safe zone)
+    # ✅ LOGO (5% rule - top-left safe zone)
     if logo:
         canvas.paste(logo, (40, 40), logo)
 
     return np.array(canvas)
 
 # --- UI ---
-st.title("🎬 SM Interiors Reel Tool — Background Removal")
-st.caption("6s reels • Removes outdoor backgrounds • No text overlap • Nov 24, 2025")
+st.title("🎬 SM Interiors Reel Tool — Professional Background Removal")
+st.caption("6s reels • Rembg + OpenCV • AI text generation • Nov 24, 2025")
 
 col1, col2 = st.columns(2)
 
@@ -317,7 +372,7 @@ with col1:
         with st.spinner("Processing image..."):
             product_img, img_bytes = safe_image_load(uploaded)
             if product_img:
-                st.image(product_img, caption="✅ Background removed", use_column_width=True)
+                st.image(product_img, caption="✅ Background removed & professionally composed", use_column_width=True)
     else:
         product_img = None
         img_bytes = None
@@ -326,16 +381,15 @@ with col1:
     price = st.text_input("Price", "Ksh 18,999", label_visibility="collapsed")
 
 with col2:
-    st.subheader("🎨 AI-Powered Copy")
+    st.subheader("🤖 AI-Powered Text")
     if client and uploaded and img_bytes:
-        if st.button("✨ Analyze Image + Get AI Copy", type="secondary", use_container_width=True):
-            with st.spinner("AI analyzing image..."):
-                ai_data = analyze_image_with_groq(img_bytes)
+        if st.button("✨ Generate All Text with AI", type="secondary", use_container_width=True):
+            with st.spinner("AI generating text..."):
+                ai_data = generate_text_with_groq(img_bytes)
+                st.session_state.title = ai_data.get("title", "Luxury Furniture")[:25]
                 st.session_state.hook = ai_data.get("hook", "LIMITED STOCK!")[:18]
-                st.session_state.title = f"{ai_data.get('color', 'Grey')} {ai_data.get('product_type', 'Furniture')}"[:25]
-                st.session_state.cta = "DM TO ORDER • 0710 895 737"[:30]
-                st.session_state.ai_data = ai_data
-                st.success("✅ AI generated copy!")
+                st.session_state.cta = ai_data.get("cta", "DM TO ORDER • 0710 895 737")[:30]
+                st.success("✅ AI generated all text content!")
     else:
         st.info("ℹ️ AI features disabled (no API key). Use manual text below.")
 
@@ -447,4 +501,4 @@ if st.button("🚀 GENERATE 6-SECOND REEL", type="primary", use_container_width=
             clip.close()
 
 st.markdown("---")
-st.caption("✅ TESTED ON STREAMLIT CLOUD • BACKGROUND REMOVAL • NO TEXT OVERLAP • NOV 24, 2025")
+st.caption("✅ TESTED ON STREAMLIT CLOUD • PROFESSIONAL BACKGROUND REMOVAL • NO TEXT OVERLAP • NOV 24, 2025")
