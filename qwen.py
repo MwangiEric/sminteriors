@@ -1,221 +1,372 @@
 import streamlit as st
-from moviepy.editor import VideoClip
-from PIL import Image, ImageDraw, ImageFont,ImageFilter
-import numpy as np
-import math
-import tempfile
-import os
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
+import tempfile, os, numpy as np, io
+from moviepy.editor import ImageSequenceClip, AudioFileClip
+import requests
+import base64
+from groq import Groq
 
-# ================================
-# 🎨 Professional Color Palette
-# ================================
-GOLD_LIGHT = (245, 215, 140)   # Warm, luminous gold
-GOLD_DARK  = (180, 130, 40)    # Rich, deep gold
-ESPRESSO   = (50, 40, 35)      # Near-black espresso brown
-ACCENT     = (255, 240, 200)   # Soft highlight
+st.set_page_config(page_title="SM Interiors Reel Tool", layout="wide", page_icon="🎬")
 
-# ================================
-# 🖼️ Background Animation Engine
-# ================================
-def create_cinematic_background(width, height, t):
-    """Generate a luxurious animated background with depth and motion."""
-    # Base canvas
-    img = Image.new('RGB', (width, height), ESPRESSO)
-    draw = ImageDraw.Draw(img, 'RGBA')
-    
-    # Slow vertical wave distortion for "shimmer"
-    wave_freq = 0.8
-    wave_amp = 8
-    offset = wave_amp * math.sin(2 * math.pi * t / 12)
-    
-    # Draw multiple gradient layers for depth
-    for i in range(5):
-        alpha = max(0, 80 - i * 15)  # fade out layers
-        y_offset = int(i * 30 + offset * (1 - i/5))
-        
-        # Alternate gold tones
-        color = GOLD_LIGHT if i % 2 == 0 else GOLD_DARK
-        
-        for y in range(0, height, 2):
-            # Create horizontal scanlines with subtle offset
-            ratio = ((y + y_offset) % height) / height
-            blend = 0.3 + 0.7 * (1 - abs(ratio - 0.5) * 2)  # bell curve
-            
-            r = int(ESPRESSO[0] * (1 - blend) + color[0] * blend)
-            g = int(ESPRESSO[1] * (1 - blend) + color[1] * blend)
-            b = int(ESPRESSO[2] * (1 - blend) + color[2] * blend)
-            
-            draw.line([(0, y), (width, y)], fill=(r, g, b, alpha))
-    
-    # Add subtle vignette for cinematic feel
-    vignette = Image.new('L', (width, height), 0)
-    v_draw = ImageDraw.Draw(vignette)
-    for i in range(0, min(width, height)//2, 4):
-        opacity = int(255 * (i / (min(width, height)//2)) * 0.6)
-        v_draw.ellipse(
-            (i, i, width - i, height - i),
-            outline=opacity,
-            width=4
-        )
-    vignette = vignette.filter(ImageFilter.GaussianBlur(30))
-    img.putalpha(vignette)
-    
-    return img.convert('RGB')
+WIDTH, HEIGHT = 1080, 1920
+FPS, DURATION = 30, 6  # 6 seconds
 
-# ================================
-# 📝 Text Rendering with Motion
-# ================================
-def render_text_with_motion(draw, text, font, width, height, t, duration, fade_in, fade_out):
-    # Center position
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    th = bbox[3] - bbox[1]
-    x = (width - tw) // 2
-    y = (height - th) // 2
-    
-    # Subtle floating motion
-    float_amp = 5
-    float_freq = 0.3
-    y += float_amp * math.sin(2 * math.pi * t * float_freq)
-    
-    # Fade & glow
-    if t < fade_in:
-        alpha = t / fade_in
-    elif t > duration - fade_out:
-        alpha = (duration - t) / fade_out
-    else:
-        alpha = 1.0
-    
-    # Glow effect (draw multiple slightly offset shadows)
-    glow_steps = 3
-    glow_alpha = min(1.0, alpha * 0.6)
-    for dx, dy in [(0,0), (1,0), (0,1), (-1,0), (0,-1)]:
-        for i in range(glow_steps):
-            intensity = int(255 * glow_alpha * (1 - i/glow_steps))
-            if intensity > 0:
-                draw.text(
-                    (x + dx*i//2, y + dy*i//2),
-                    text,
-                    fill=(255, 240, 200, intensity),
-                    font=font
-                )
-    
-    # Main text (gold)
-    text_alpha = int(255 * alpha)
-    draw.text((x, y), text, fill=(GOLD_LIGHT[0], GOLD_LIGHT[1], GOLD_LIGHT[2], text_alpha), font=font)
+# Reliable MP3 audio (no codec issues)
+MUSIC_URLS = {
+    "Background Advertising": "https://pixabay.com/music/corporate-background-advertising-439969/",
+    "Ad Music": "https://pixabay.com/music/upbeat-advertising-music-433262/",
+}
 
-# ================================
-# 🎞️ Frame Generator
-# ================================
-def make_frame(t, text, width, height, font_size, duration, fade_in, fade_out):
-    # Create animated background
-    bg = create_cinematic_background(width, height, t)
-    
-    # Overlay with transparency for text
-    overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    
-    # Load modern font (fallback to default)
+LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png"
+
+# Initialize Groq
+GROQ_API_KEY = st.secrets["groq_key"]
+client = Groq(api_key=GROQ_API_KEY)
+
+@st.cache_resource
+def load_logo():
     try:
-        font = ImageFont.truetype("Arial Bold.ttf", font_size)
+        resp = requests.get(LOGO_URL, timeout=5)
+        if resp.status_code == 200:
+            logo = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((300, 150))
+            return logo
     except:
+        pass
+    return None
+
+def safe_image_load(uploaded):
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
+            tmp_file.write(uploaded.read())
+            tmp_path = tmp_file.name
+
+        img = Image.open(tmp_path).convert("RGBA")
+
+        # Auto-resize for Groq (avoid 413 error)
+        max_dim = 1024
+        if max(img.width, img.height) > max_dim:
+            ratio = max_dim / max(img.width, img.height)
+            new_size = (int(img.width * ratio), int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
+        img = ImageEnhance.Contrast(img).enhance(1.3)
+        img = ImageEnhance.Sharpness(img).enhance(1.8)
+        img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+        os.unlink(tmp_path)
+
+        # Save to bytes for Groq
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+
+        return img.resize((900, 900), Image.LANCZOS), img_bytes.getvalue()
+
+    except Exception as e:
+        st.error(f"Image failed: {e}. Try a simple JPG/PNG under 5MB.")
+        return None, None
+
+def analyze_image_with_groq(image_bytes):
+    try:
+        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": """
+Analyze this furniture product image and return ONLY in this format:
+
+PRODUCT_TYPE: [e.g., Wingback Armchair]
+COLOR: [e.g., Teal Velvet]
+STYLE: [e.g., Modern, Classic, Luxury]
+MOOD: [e.g., Cozy, Elegant, Bold]
+
+Then suggest:
+HOOK: [short, urgent, under 25 chars]
+TITLE: [clean, descriptive]
+CTA: [action-oriented, includes contact if possible]
+
+Example:
+PRODUCT_TYPE: Wingback Armchair
+COLOR: Teal Velvet
+STYLE: Luxury
+MOOD: Bold
+
+HOOK: This Sold Out in 24 H
+TITLE: Teal Wingback Chair
+CTA: Order Now • 0710 895 737
+"""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"image/jpeg;base64,{image_b64}"
+                            }
+                        }
+                    ],
+                }
+            ],
+            model="meta-llama/llama-4-maverick-17b-128e-instruct",  # ✅ Best for object recognition
+            temperature=0.7,
+            max_tokens=200,
+        )
+
+        response = chat_completion.choices[0].message.content.strip()
+        return parse_groq_response(response)
+
+    except Exception as e:
+        st.warning(f"Image analysis failed: {e}. Using defaults.")
+        return {
+            "product_type": "Furniture",
+            "color": "Grey",
+            "style": "Modern",
+            "mood": "Elegant",
+            "hook": "This Sold Out in 24 H",
+            "title": "Luxury Furniture",
+            "cta": "DM TO ORDER • 0710 895 737"
+        }
+
+def parse_groq_response(text):
+    lines = text.split("\n")
+    data = {}
+    for line in lines:
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            data[key.strip()] = value.strip()
+    return data
+
+# --- TEMPLATES ---
+TEMPLATES = {
+    "Luxury": {
+        "bg_color": "#0F0A05",
+        "ring_color": "#FFD700",
+        "text_color": "#FFFFFF",
+        "price_bg": "#FFD700",
+        "price_text": "#0F0A05",
+        "cta_pulse": True,
+    },
+    "Bold": {
+        "bg_color": "#000000",
+        "ring_color": "#FF4500",
+        "text_color": "#FFFFFF",
+        "price_bg": "#FF4500",
+        "price_text": "#000000",
+        "cta_pulse": True,
+    },
+    "Minimalist": {
+        "bg_color": "#FFFFFF",
+        "ring_color": "#000000",
+        "text_color": "#000000",
+        "price_bg": "#000000",
+        "price_text": "#FFFFFF",
+        "cta_pulse": False,
+    }
+}
+
+def create_frame(t, product_img, hook, price, cta, title, template, logo=None):
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), template["bg_color"])
+    draw = ImageDraw.Draw(canvas)
+
+    # Gold rings
+    for cx, cy, r in [(540, 960, 600), (660, 840, 800), (360, 1140, 1000)]:
+        draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=template["ring_color"], width=4)
+
+    # Product with adjustments
+    base_scale = st.session_state.get("product_scale", 1.0)
+    scale = base_scale * (0.8 + 0.2 * (np.sin(t * 2) ** 2))
+    size = int(900 * scale)
+    resized = product_img.resize((size, size), Image.LANCZOS)
+    angle = np.sin(t * 0.5) * 3
+    rotated = resized.rotate(angle, expand=True, resample=Image.BICUBIC)
+    prod_x = (WIDTH - rotated.width) // 2
+    prod_y_offset = st.session_state.get("prod_y_offset", 0)
+    prod_y = int(HEIGHT * 0.35 + prod_y_offset + np.sin(t * 3) * 30)
+    canvas.paste(rotated, (prod_x, prod_y), rotated if rotated.mode == 'RGBA' else None)
+
+    # Fonts (fixed sizes per template)
+    font_sizes = {
+        "Luxury": (100, 140, 160, 100),
+        "Bold": (100, 140, 160, 100),
+        "Minimalist": (90, 120, 140, 90),
+    }
+    tfs, hfs, pfs, cfs = font_sizes[template_choice]
+
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", tfs)
+        hook_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", hfs)
+        price_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", pfs)
+        cta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", cfs)
+    except:
+        title_font = hook_font = price_font = cta_font = ImageFont.load_default()
+
+    # Text positions (adjustable)
+    title_y = st.session_state.get("title_y", 80)
+    hook_y = st.session_state.get("hook_y", 120)
+    price_y = st.session_state.get("price_y", HEIGHT - 500)
+    cta_y = st.session_state.get("cta_y", HEIGHT - 180)
+
+    # Title
+    bbox = draw.textbbox((0, 0), title, font=title_font)
+    text_w = bbox[2] - bbox[0]
+    safe_x = max(50, (WIDTH - text_w) // 2)
+    draw.text((safe_x, title_y), title, font=title_font, fill=template["text_color"], stroke_width=4, stroke_fill="#000")
+
+    # Hook
+    bbox = draw.textbbox((0, 0), hook, font=hook_font)
+    text_w = bbox[2] - bbox[0]
+    safe_x = max(50, (WIDTH - text_w) // 2)
+    draw.text((safe_x, hook_y), hook, font=hook_font, fill=template["ring_color"], stroke_width=6, stroke_fill="#000")
+
+    # Price
+    badge_w, badge_h = 750, 180
+    badge_x = (WIDTH - badge_w) // 2
+    draw.rounded_rectangle([badge_x, price_y, badge_x + badge_w, price_y + badge_h], radius=90, fill=template["price_bg"])
+    p_bbox = draw.textbbox((0, 0), price, font=price_font)
+    draw.text((WIDTH // 2, price_y + 30), price, font=price_font, fill=template["price_text"], anchor="mm")
+
+    # CTA
+    if template["cta_pulse"]:
+        pulse_scale = 1 + 0.1 * np.sin(t * 8)
+        cta_font_size = int(cfs * pulse_scale)
         try:
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+            cta_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", cta_font_size)
         except:
-            font = ImageFont.load_default()
-    
-    # Render animated text
-    render_text_with_motion(draw, text, font, width, height, t, duration, fade_in, fade_out)
-    
-    # Composite
-    result = Image.alpha_composite(bg.convert('RGBA'), overlay)
-    return np.array(result.convert('RGB'))
+            cta_font = ImageFont.load_default()
+    c_bbox = draw.textbbox((0, 0), cta, font=cta_font)
+    c_w = c_bbox[2] - c_bbox[0]
+    draw.text(((WIDTH - c_w) // 2, cta_y), cta, font=cta_font, fill=template["text_color"], stroke_width=5, stroke_fill="#000")
 
-# ================================
-# 🌐 Streamlit App
-# ================================
-st.set_page_config(
-    page_title="Cinematic Text Animation",
-    page_icon="🎬",
-    layout="centered"
-)
+    # Logo
+    if logo:
+        canvas.paste(logo, (30, 30), logo)
 
-# Custom CSS for modern UI
-st.markdown("""
-<style>
-    .main { background: #0a0a0c; }
-    h1 { color: #f5d78c; text-align: center; font-weight: 700; }
-    .stButton>button {
-        background: linear-gradient(to right, #c69a4a, #8c6d2f);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.6rem 1.5rem;
-        font-weight: 600;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    }
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 16px rgba(0,0,0,0.4);
-    }
-    .sidebar .sidebar-content { background: #121216; }
-</style>
-""", unsafe_allow_html=True)
+    return np.array(canvas)
 
-st.title("🎬 Cinematic Text Animation")
-st.markdown("<div style='text-align: center; color: #aaa; margin-bottom: 30px;'>Professional • Modern • Spectacular</div>", unsafe_allow_html=True)
+# --- UI ---
+st.title("🎬 SM Interiors Reel Tool — Pro Templates + AI Vision")
+st.caption("6s reels • Preview before render • Adjust layout • MP3 audio")
 
-# Sidebar
-with st.sidebar:
-    st.markdown("### ✨ Settings")
-    text = st.text_input("Text", "ELEVATE YOUR STORY", key="text")
-    duration = st.slider("Duration (seconds)", 4, 15, 8)
-    fade_in = st.slider("Fade In", 0.8, 3.0, 1.4)
-    fade_out = st.slider("Fade Out", 0.8, 3.0, 1.4)
-    font_size = st.slider("Font Size", 40, 120, 84)
-    st.markdown("<br><div style='font-size: 0.85em; color: #888;'>Background auto-animated in gold & espresso tones</div>", unsafe_allow_html=True)
+col1, col2 = st.columns(2)
 
-# Generate button
-if st.button("✨ Generate Spectacular Animation"):
-    W, H = 1920, 1080  # Full HD cinematic
-    
-    with st.spinner("Rendering cinematic masterpiece... (30-60 sec)"):
-        try:
-            clip = VideoClip(
-                lambda t: make_frame(t, text, W, H, font_size, duration, fade_in, fade_out),
-                duration=duration
+with col1:
+    uploaded = st.file_uploader("Upload Product Photo", type=["png", "jpg", "jpeg", "webp"], help="JPG/PNG <5MB—auto-enhances")
+    if uploaded:
+        product_img, img_bytes = safe_image_load(uploaded)
+        if product_img:
+            st.image(product_img, caption="Ready Product", use_column_width=True)
+    else:
+        product_img = None
+        img_bytes = None
+
+    price = st.text_input("Price", "Ksh 18,999")
+
+with col2:
+    product_name = st.text_input("Product Name (optional)", "")
+    image_desc = st.text_area("Image Description (optional)", "")
+
+    template_choice = st.selectbox("Template", list(TEMPLATES.keys()), index=0)
+
+    if uploaded and img_bytes and st.button("✨ Analyze Image + Get AI Copy", type="secondary", use_container_width=True):
+        ai_data = analyze_image_with_groq(img_bytes)
+        st.session_state.hook = ai_data.get("hook", "This Sold Out in 24 H")
+        st.session_state.title = ai_data.get("title", "Luxury Furniture")
+        st.session_state.cta = ai_data.get("cta", "DM TO ORDER • 0710 895 737")
+        st.session_state.ai_data = ai_data
+        st.success("✅ AI analyzed image and generated copy!")
+
+    hook = st.text_input("Hook", value=st.session_state.get("hook", "This Sold Out in 24 H"))
+    title = st.text_input("Title", value=st.session_state.get("title", "Wingback Armchair"))
+    cta = st.text_input("CTA", value=st.session_state.get("cta", "DM TO ORDER • 0710 895 737"))
+    music_key = st.selectbox("Music", list(MUSIC_URLS.keys()))
+
+# --- ADJUSTMENTS ---
+st.markdown("---")
+st.subheader("🔧 Adjust Layout (Optional)")
+
+with st.expander("Position & Size Controls"):
+    col_adj1, col_adj2 = st.columns(2)
+    with col_adj1:
+        prod_y_offset = st.slider("Product Vertical Position", -200, 200, 0, help="Move product up/down")
+        title_y = st.slider("Title Y", 50, 200, 80)
+        hook_y = st.slider("Hook Y", 50, 200, 120)
+    with col_adj2:
+        product_scale = st.slider("Product Scale", 0.5, 1.5, 1.0, step=0.1)
+        cta_y = st.slider("CTA Y", HEIGHT - 300, HEIGHT - 100, HEIGHT - 180)
+        price_y = st.slider("Price Y", HEIGHT - 600, HEIGHT - 300, HEIGHT - 500)
+
+# Save to session state
+st.session_state.prod_y_offset = prod_y_offset
+st.session_state.product_scale = product_scale
+st.session_state.title_y = title_y
+st.session_state.hook_y = hook_y
+st.session_state.cta_y = cta_y
+st.session_state.price_y = price_y
+st.session_state.template_choice = template_choice
+
+# --- PREVIEW ---
+if uploaded and product_img is not None:
+    st.markdown("---")
+    st.subheader("🖼️ Preview (Before Rendering)")
+    logo_img = load_logo()
+    template = TEMPLATES[template_choice]
+    preview_frame = create_frame(0, product_img, hook, price, cta, title, template, logo_img)
+    preview_img = Image.fromarray(preview_frame)
+    st.image(preview_img, caption="Preview Frame", use_column_width=True)
+    st.info("✅ Adjust sliders above if needed, then click 'Generate Reel'.")
+
+# --- RENDER ---
+if st.button("🚀 Generate Reel", type="primary", use_container_width=True):
+    if not uploaded or product_img is None:
+        st.error("Upload a photo!")
+    else:
+        with st.spinner(f"Rendering 6s video with {music_key}…"):
+            logo_img = load_logo()
+            template = TEMPLATES[template_choice]
+            frames = [create_frame(i / FPS, product_img, hook, price, cta, title, template, logo_img) for i in range(FPS * DURATION)]
+
+            clip = ImageSequenceClip(frames, fps=FPS)
+
+            # Audio handling (MP3)
+            audio = None
+            audio_path = None
+            try:
+                resp = requests.get(MUSIC_URLS[music_key], timeout=10)
+                if resp.status_code == 200:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+                        tmp.write(resp.content)
+                        audio_path = tmp.name
+                    full_audio = AudioFileClip(audio_path)
+                    audio = full_audio.subclip(0, min(DURATION, full_audio.duration))
+                    clip = clip.set_audio(audio)
+            except Exception as e:
+                st.warning(f"Audio skipped: {e}")
+
+            video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            clip.write_videofile(
+                video_path,
+                fps=FPS,
+                codec="libx264",
+                audio_codec="aac" if audio else None,
+                threads=4,
+                preset="medium",
+                logger=None
             )
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-                clip.write_videofile(
-                    tmp.name,
-                    fps=30,
-                    codec="libx264",
-                    audio=False,
-                    preset="slow",
-                    logger=None,
-                    threads=4,
-                    ffmpeg_params=["-crf", "18"]  # High quality
-                )
-                video_path = tmp.name
-            
-            # Display
-            st.video(video_path)
-            
-            # Download
-            with open(video_path, "rb") as f:
-                st.download_button(
-                    "⬇️ Download Full HD MP4",
-                    f,
-                    file_name="cinematic_text_animation.mp4",
-                    mime="video/mp4"
-                )
-            
-            os.unlink(video_path)
-            
-        except Exception as e:
-            st.error(f"Rendering failed: {str(e)}")
-            st.info("Make sure requirements include: moviepy, pillow, imageio[ffmpeg], numpy")
 
-# Footer
-st.markdown("<br><hr><div style='text-align: center; color: #555; font-size: 0.9em;'>Made for creators who demand excellence</div>", unsafe_allow_html=True)
+            st.success("✅ Reel done!")
+            st.video(video_path)
+
+            with open(video_path, "rb") as f:
+                st.download_button("💾 Download Reel", f, "SM_Reel.mp4", "video/mp4", use_container_width=True)
+
+            # Cleanup
+            if audio_path and os.path.exists(audio_path):
+                os.unlink(audio_path)
+            if os.path.exists(video_path):
+                os.unlink(video_path)
+            clip.close()
+
+st.markdown("---")
+st.caption("For SM Interiors • Tested & shipped Nov 24, 2025")
