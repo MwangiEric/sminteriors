@@ -73,7 +73,7 @@ def generate_diy_content(client, category="furniture"):
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama3-8b-8192",
+            model="meta-llama/llama-4-maverick-17b-128e-instruct",
             temperature=0.8,
             max_tokens=500
         )
