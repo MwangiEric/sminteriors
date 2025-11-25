@@ -1,19 +1,24 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
-import tempfile, os, numpy as np, io
+import tempfile, os, numpy as np, io, time
 from moviepy.editor import ImageSequenceClip, AudioFileClip
 import requests
 import base64
-import cv2
 import rembg
 from groq import Groq
 
-st.set_page_config(page_title="SM Interiors Reel Tool", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="SM Interiors Pro Reel Generator", layout="wide", page_icon="🎬")
 
-WIDTH, HEIGHT = 1080, 1920
+# Platform-specific dimensions
+PLATFORM_DIMENSIONS = {
+    "Instagram Reels": (1080, 1920),
+    "Instagram Stories": (1080, 1920),  # Same dimensions but different safe zones
+    "Facebook Feed": (1200, 630)
+}
+
 FPS, DURATION = 30, 6  # 6 seconds
 
-# ✅ Your hosted MP3
+# Your hosted MP3
 MUSIC_URL = "https://ik.imagekit.io/ericmwangi/advertising-music-308403.mp3"
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png"
 
@@ -30,16 +35,22 @@ def load_logo():
     try:
         resp = requests.get(LOGO_URL, timeout=5)
         if resp.status_code == 200:
-            logo = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((280, 140))
-            return logo
-    except Exception as e:
-        st.warning(f"Logo load failed: {e}")
-    # Fallback logo
-    fallback = Image.new("RGBA", (280, 140), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(fallback)
-    font = ImageFont.load_default()
-    draw.text((0, 0), "SM", font=font, fill="#FFD700")
-    return fallback
+            logo = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+            # Scale logo based on platform
+            if st.session_state.get("platform", "Instagram Reels") == "Facebook Feed":
+                return logo.resize((200, 100))
+            return logo.resize((280, 140))
+    except:
+        # Fallback logo
+        if st.session_state.get("platform", "Instagram Reels") == "Facebook Feed":
+            size = (200, 100)
+        else:
+            size = (280, 140)
+        fallback = Image.new("RGBA", size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(fallback)
+        font = ImageFont.load_default()
+        draw.text((10, 10), "SM", font=font, fill="#FFD700")
+        return fallback
 
 def remove_background(img):
     """Professional background removal using rembg"""
@@ -62,81 +73,41 @@ def remove_background(img):
         
         return img_pil
     except Exception as e:
-        st.warning(f"Rembg failed: {e}. Using OpenCV fallback.")
-        return remove_background_opencv(img)
+        st.warning(f"Background removal failed: {e}. Using original image.")
+        return img.convert('RGBA')
 
 def remove_black_edges(img):
     """Clean up black edges after background removal"""
-    # Convert to numpy
-    img_np = np.array(img)
-    
-    # Create mask of non-transparent pixels
-    alpha = img_np[:, :, 3] > 0
-    
-    # Find bounding box of non-transparent area
-    y, x = np.where(alpha)
-    if len(y) == 0 or len(x) == 0:
-        return img
-    
-    min_y, max_y = np.min(y), np.max(y)
-    min_x, max_x = np.min(x), np.max(x)
-    
-    # Crop to bounding box
-    img_cropped = img.crop((min_x, min_y, max_x, max_y))
-    
-    # Add padding (10% of the product size)
-    pad = max(img_cropped.width, img_cropped.height) // 10
-    new_size = (img_cropped.width + 2*pad, img_cropped.height + 2*pad)
-    padded = Image.new('RGBA', new_size, (0, 0, 0, 0))
-    padded.paste(img_cropped, (pad, pad), img_cropped)
-    
-    return padded
-
-def remove_background_opencv(img):
-    """OpenCV fallback for background removal"""
     try:
-        # Convert to numpy array
+        # Convert to numpy
         img_np = np.array(img)
         
-        # Convert to HSV for better color separation
-        hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
+        # Create mask of non-transparent pixels
+        alpha = img_np[:, :, 3] > 0
         
-        # Create mask based on color differences
-        # For outdoor images, we'll use a simple threshold approach
-        corners = [
-            img_np[0, 0],      # top-left
-            img_np[0, -1],     # top-right
-            img_np[-1, 0],     # bottom-left
-            img_np[-1, -1]     # bottom-right
-        ]
-        bg_color = np.mean(corners, axis=0).astype(np.uint8)
+        # Find bounding box of non-transparent area
+        y, x = np.where(alpha)
+        if len(y) == 0 or len(x) == 0:
+            return img
         
-        # Create mask where pixels are similar to background
-        diff = cv2.absdiff(img_np, bg_color)
-        diff = np.max(diff, axis=2)
-        mask = diff > 30  # Threshold for "not background"
+        min_y, max_y = int(np.min(y)), int(np.max(y))
+        min_x, max_x = int(np.min(x)), int(np.max(x))
         
-        # Clean up mask
-        mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3,3), np.uint8))
+        # Crop to bounding box
+        img_cropped = img.crop((min_x, min_y, max_x, max_y))
         
-        # Create transparent background
-        result = np.zeros((img_np.shape[0], img_np.shape[1], 4), dtype=np.uint8)
-        result[:, :, :3] = img_np
-        result[:, :, 3] = mask * 255
+        # Add padding (10% of the product size)
+        pad = max(img_cropped.width, img_cropped.height) // 10
+        new_size = (img_cropped.width + 2*pad, img_cropped.height + 2*pad)
+        padded = Image.new('RGBA', new_size, (0, 0, 0, 0))
+        padded.paste(img_cropped, (pad, pad), img_cropped)
         
-        # Convert to PIL
-        img_pil = Image.fromarray(result)
-        
-        # Remove black edges
-        img_pil = remove_black_edges(img_pil)
-        
-        return img_pil
-    except Exception as e:
-        st.warning(f"OpenCV background removal failed: {e}. Using original image.")
-        return img.convert('RGBA')
+        return padded
+    except:
+        return img  # Return original if edge removal fails
 
-def compose_product_image(img):
-    """Professional image composition"""
+def compose_product_image(img, platform="Instagram Reels"):
+    """Professional image composition with platform-specific sizing"""
     try:
         # Remove background
         img = remove_background(img)
@@ -148,13 +119,20 @@ def compose_product_image(img):
         img = ImageEnhance.Sharpness(img).enhance(1.8)
         img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
         
+        # Get platform dimensions
+        WIDTH, HEIGHT = PLATFORM_DIMENSIONS[platform]
+        
         # Professional composition rules
         # 1. Maintain aspect ratio
-        # 2. Size product to 85% of frame width (with padding)
+        # 2. Size product to 80% of frame width (with padding)
         # 3. Center vertically in the safe zone
         
-        # Calculate target size
-        max_width = int(WIDTH * 0.85)
+        # Calculate target size based on platform
+        if platform == "Facebook Feed":
+            max_width = int(WIDTH * 0.7)  # Smaller for Facebook
+        else:
+            max_width = int(WIDTH * 0.8)
+        
         ratio = max_width / img.width
         new_height = int(img.height * ratio)
         
@@ -165,10 +143,15 @@ def compose_product_image(img):
         background = Image.new('RGBA', (WIDTH, HEIGHT), (0, 0, 0, 0))
         
         # Center horizontally
-        x = (WIDTH - max_width) // 2
+        x = int((WIDTH - max_width) // 2)
         
-        # Center vertically in safe zone (350-700px from top)
-        y = 500  # Perfect center for most products
+        # Center vertically based on platform
+        if platform == "Facebook Feed":
+            y = int(HEIGHT * 0.4)  # Higher for Facebook
+        elif platform == "Instagram Stories":
+            y = int(HEIGHT * 0.45)  # Slightly higher for Stories
+        else:
+            y = int(HEIGHT * 0.35)  # Standard for Reels
         
         # Paste product
         background.paste(img, (x, y), img)
@@ -178,7 +161,7 @@ def compose_product_image(img):
         st.error(f"Image composition failed: {e}. Using original.")
         return img
 
-def safe_image_load(uploaded):
+def safe_image_load(uploaded, platform="Instagram Reels"):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
             tmp_file.write(uploaded.read())
@@ -187,14 +170,14 @@ def safe_image_load(uploaded):
         img = Image.open(tmp_path).convert("RGBA")
         
         # Auto-resize for processing
-        max_dim = 1500  # Higher for better quality
+        max_dim = 1500
         if max(img.width, img.height) > max_dim:
             ratio = max_dim / max(img.width, img.height)
             new_size = (int(img.width * ratio), int(img.height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
         # Process image
-        processed_img = compose_product_image(img)
+        processed_img = compose_product_image(img, platform)
         os.unlink(tmp_path)
 
         # Save to bytes for Groq
@@ -202,14 +185,19 @@ def safe_image_load(uploaded):
         processed_img.save(img_bytes, format='PNG')
         img_bytes.seek(0)
 
-        return processed_img.resize((850, 850), Image.LANCZOS), img_bytes.getvalue()
+        # Get platform dimensions
+        WIDTH, HEIGHT = PLATFORM_DIMENSIONS[platform]
+        
+        # Resize to platform-specific preview size
+        preview_size = (850, int(850 * HEIGHT / WIDTH)) if platform != "Facebook Feed" else (850, 450)
+        return processed_img.resize(preview_size, Image.LANCZOS), img_bytes.getvalue()
 
     except Exception as e:
         st.error(f"Image processing failed: {e}. Try a simple JPG/PNG under 5MB.")
         return None, None
 
-def generate_text_with_groq(image_bytes):
-    """Generate all text content using Groq"""
+def generate_text_with_groq(image_bytes, platform="Instagram Reels"):
+    """Generate all text content using Groq with platform-specific prompts"""
     if not client:
         return {
             "title": "Luxury Furniture",
@@ -219,15 +207,10 @@ def generate_text_with_groq(image_bytes):
     
     try:
         image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """
+        
+        # Platform-specific prompts
+        platform_prompts = {
+            "Instagram Reels": """
 Analyze this furniture product image and generate:
 
 TITLE: [clean, descriptive product name (max 25 chars)]
@@ -238,7 +221,41 @@ Example:
 TITLE: Grey Chest of Drawers
 HOOK: 2 LEFT IN STOCK!
 CTA: ORDER NOW • 0710 895 737
+""",
+            "Instagram Stories": """
+Analyze this furniture product image and generate:
+
+TITLE: [clean, descriptive product name (max 25 chars)]
+HOOK: [short, compelling phrase for Stories (max 18 chars)]
+CTA: [swipe-up oriented phrase (max 30 chars)]
+
+Example:
+TITLE: Grey Chest of Drawers
+HOOK: Exclusive Offer Inside
+CTA: SWIPE UP TO SHOP NOW
+""",
+            "Facebook Feed": """
+Analyze this furniture product image and generate:
+
+TITLE: [clean, descriptive product name (max 30 chars)]
+HOOK: [brief benefit-focused phrase (max 25 chars)]
+CTA: [friendly call to action (max 35 chars)]
+
+Example:
+TITLE: Elegant Grey Chest of Drawers
+HOOK: Perfect for modern living spaces
+CTA: Shop now and get free delivery!
 """
+        }
+
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": platform_prompts[platform]
                         },
                         {
                             "type": "image_url",
@@ -259,11 +276,24 @@ CTA: ORDER NOW • 0710 895 737
 
     except Exception as e:
         st.warning(f"AI text generation failed: {e}. Using defaults.")
-        return {
-            "title": "Luxury Furniture",
-            "hook": "LIMITED STOCK!",
-            "cta": "DM TO ORDER • 0710 895 737"
-        }
+        if platform == "Instagram Stories":
+            return {
+                "title": "Luxury Furniture",
+                "hook": "SPECIAL OFFER INSIDE",
+                "cta": "SWIPE UP TO SHOP"
+            }
+        elif platform == "Facebook Feed":
+            return {
+                "title": "Elegant Furniture Collection",
+                "hook": "Quality Craftsmanship Guaranteed",
+                "cta": "Shop Now - Free Delivery Available"
+            }
+        else:
+            return {
+                "title": "Luxury Furniture",
+                "hook": "LIMITED STOCK!",
+                "cta": "DM TO ORDER • 0710 895 737"
+            }
 
 def parse_groq_text(text):
     """Parse Groq's text output"""
@@ -275,90 +305,271 @@ def parse_groq_text(text):
             data[key.strip()] = value.strip()
     return data
 
-# ✅ FIXED: Mobile-tested layout system
-def create_frame(t, product_img, hook, price, cta, title, logo=None):
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), "#0F0A05")  # Brand brown
+# ✅ 3 PROFESSIONAL TEMPLATES
+PRO_TEMPLATES = {
+    "Luxury": {
+        "bg_color": "#0F0A05",
+        "ring_color": "#FFD700",
+        "text_color": "#FFFFFF",
+        "price_bg": "#FFD700",
+        "price_text": "#0F0A05",
+        "cta_pulse": True,
+        "geometric_style": "gold_only",
+        "safe_zones": {
+            "title": (60, 80),
+            "hook": (60, 180),
+            "price": (540, 1600),
+            "cta": (60, 1800),
+            "logo": (40, 40)
+        }
+    },
+    "Modern": {
+        "bg_color": "#FFFFFF",
+        "ring_color": "#2C3E50",
+        "text_color": "#2C3E50",
+        "price_bg": "#3498DB",
+        "price_text": "#FFFFFF",
+        "cta_pulse": False,
+        "geometric_style": "blue_gray",
+        "safe_zones": {
+            "title": (60, 80),
+            "hook": (60, 180),
+            "price": (540, 1600),
+            "cta": (60, 1800),
+            "logo": (40, 40)
+        }
+    },
+    "Bold": {
+        "bg_color": "#000000",
+        "ring_color": "#E74C3C",
+        "text_color": "#FFFFFF",
+        "price_bg": "#E74C3C",
+        "price_text": "#FFFFFF",
+        "cta_pulse": True,
+        "geometric_style": "red_pulse",
+        "safe_zones": {
+            "title": (60, 80),
+            "hook": (60, 180),
+            "price": (540, 1600),
+            "cta": (60, 1800),
+            "logo": (40, 40)
+        }
+    }
+}
+
+# ✅ FIXED: Mobile-tested layout system with integer coordinates
+def create_frame(t, product_img, hook, price, cta, title, template_name, platform="Instagram Reels", logo=None):
+    # Get platform dimensions
+    WIDTH, HEIGHT = PLATFORM_DIMENSIONS[platform]
+    
+    # Get template
+    template = PRO_TEMPLATES[template_name]
+    
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), template["bg_color"])
     draw = ImageDraw.Draw(canvas)
-
-    # ✅ SUBTLE ANIMATED GEOMETRIC SHAPES
-    # Gold rings (static)
-    for cx, cy, r in [(540, 960, 600), (660, 840, 800), (360, 1140, 1000)]:
-        draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline="#FFD700", width=4)
-
-    # Animated geometric shapes
-    for i in range(2):
-        # Circle animation
-        radius = int(150 + 30 * np.sin(t * 0.5 + i * 2))
-        x = int(540 + 100 * np.cos(t * 0.3 + i))
-        y = int(960 + 80 * np.sin(t * 0.3 + i))
-        draw.ellipse([x-radius, y-radius, x+radius, y+radius], 
-                    outline="#FFD700", width=2, fill=None)
-
-        # Rectangle animation
-        w = int(200 + 40 * np.sin(t * 0.4 + i))
-        h = int(150 + 30 * np.cos(t * 0.4 + i))
-        x1 = int(660 - w//2 + 50 * np.cos(t * 0.6 + i))
-        y1 = int(840 - h//2 + 40 * np.sin(t * 0.6 + i))
-        draw.rectangle([x1, y1, x1+w, y1+h], 
-                      outline="#FFD700", width=2, fill=None)
+    
+    # ✅ SUBTLE ANIMATED GEOMETRIC SHAPES (template-specific)
+    if template["geometric_style"] == "gold_only":
+        # Gold rings (static)
+        for cx, cy, r in [(WIDTH//2, HEIGHT//2, 600), (WIDTH//2+120, HEIGHT//2-120, 800), (WIDTH//2-180, HEIGHT//2+180, 1000)]:
+            draw.ellipse([int(cx-r), int(cy-r), int(cx+r), int(cy+r)], outline=template["ring_color"], width=4)
+    
+    elif template["geometric_style"] == "blue_gray":
+        # Subtle blue rectangles and circles
+        for i in range(3):
+            size = int(150 + 30 * np.sin(t * 0.5 + i))
+            x = int(WIDTH//2 + 200 * np.cos(t * 0.3 + i * 2))
+            y = int(HEIGHT//2 + 150 * np.sin(t * 0.3 + i * 2))
+            if i % 2 == 0:
+                draw.ellipse([x-size, y-size, x+size, y+size], outline="#3498DB", width=2)
+            else:
+                draw.rectangle([x-size, y-size, x+size, y+size], outline="#2C3E50", width=2)
+    
+    elif template["geometric_style"] == "red_pulse":
+        # Pulsing red elements
+        for i in range(2):
+            pulse = 1 + 0.2 * np.sin(t * 2 + i)
+            size = int(100 * pulse)
+            x = int(WIDTH//2 + 150 * np.cos(t * 0.4 + i))
+            y = int(HEIGHT//2 + 100 * np.sin(t * 0.4 + i))
+            draw.ellipse([x-size, y-size, x+size, y+size], outline="#E74C3C", width=int(2 * pulse))
 
     # ✅ PRODUCT (centered professionally)
     base_scale = st.session_state.get("product_scale", 1.0)
     scale = base_scale * (0.8 + 0.2 * (np.sin(t * 2) ** 2))
-    size = int(850 * scale)
-    resized = product_img.resize((size, size), Image.LANCZOS)
+    
+    # Platform-specific sizing
+    if platform == "Facebook Feed":
+        size = int(600 * scale)
+        max_height = 400
+    else:
+        size = int(850 * scale)
+        max_height = 1200
+    
+    # Resize product
+    if product_img.width > product_img.height:
+        # Landscape product
+        new_width = size
+        new_height = int(size * product_img.height / product_img.width)
+    else:
+        # Portrait product
+        new_height = size
+        new_width = int(size * product_img.width / product_img.height)
+    
+    # Ensure product doesn't exceed max height
+    if new_height > max_height:
+        scale_factor = max_height / new_height
+        new_width = int(new_width * scale_factor)
+        new_height = max_height
+    
+    resized = product_img.resize((new_width, new_height), Image.LANCZOS)
+    
+    # Rotate slightly
     angle = np.sin(t * 0.5) * 3
     rotated = resized.rotate(angle, expand=True, resample=Image.BICUBIC)
     
-    # Product in safe zone (350-700px from top)
+    # Product position based on platform and safe zones
     prod_y = st.session_state.get("prod_y_offset", 0)
-    prod_y = max(350, min(700, 500 + prod_y + np.sin(t * 3) * 30))
-    prod_x = (WIDTH - rotated.width) // 2
     
-    canvas.paste(rotated, (prod_x, prod_y), rotated if rotated.mode == 'RGBA' else None)
-
-    # ✅ FIXED TEXT POSITIONS (MOBILE-TESTED SAFE ZONES)
-    # Title (top zone)
+    if platform == "Facebook Feed":
+        prod_y_base = int(HEIGHT * 0.4)
+        prod_y = int(max(200, min(400, prod_y_base + prod_y)))
+        prod_x = int((WIDTH - rotated.width) // 2)
+    elif platform == "Instagram Stories":
+        prod_y_base = int(HEIGHT * 0.45)
+        prod_y = int(max(300, min(700, prod_y_base + prod_y + np.sin(t * 3) * 30)))
+        prod_x = int((WIDTH - rotated.width) // 2)
+    else:  # Instagram Reels
+        prod_y_base = int(HEIGHT * 0.35)
+        prod_y = int(max(350, min(700, prod_y_base + prod_y + np.sin(t * 3) * 30)))
+        prod_x = int((WIDTH - rotated.width) // 2)
+    
+    # Paste product (with proper integer coordinates)
     try:
-        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 90)
+        canvas.paste(rotated, (int(prod_x), int(prod_y)), rotated if rotated.mode == 'RGBA' else None)
+    except Exception as e:
+        st.warning(f"Product paste failed: {e}. Using fallback position.")
+        canvas.paste(rotated, (int(prod_x), int(prod_y_base)), rotated if rotated.mode == 'RGBA' else None)
+
+    # ✅ PLATFORM-SPECIFIC TEXT POSITIONS
+    safe_zones = template["safe_zones"]
+    
+    # Title (top zone)
+    if platform == "Facebook Feed":
+        title_font_size = 50
+        hook_font_size = 40
+        price_font_size = 45
+        cta_font_size = 40
+    else:
+        title_font_size = 90
+        hook_font_size = 110
+        price_font_size = 130
+        cta_font_size = 85
+    
+    try:
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", title_font_size)
     except:
         title_font = ImageFont.load_default()
-    draw.text((60, 80), title, font=title_font, fill="#FFFFFF", 
-              stroke_width=5, stroke_fill="#000")
+    
+    # Platform-specific title position
+    if platform == "Instagram Stories":
+        # Add "Swipe Up" indicator
+        title_pos = (safe_zones["title"][0], safe_zones["title"][1] - 40)
+        draw.text(title_pos, title, font=title_font, fill=template["text_color"], 
+                  stroke_width=4, stroke_fill="#000")
+        
+        # Swipe up arrow
+        arrow_x, arrow_y = WIDTH - 100, HEIGHT - 100
+        draw.polygon([(arrow_x, arrow_y), (arrow_x + 50, arrow_y), (arrow_x + 25, arrow_y - 40)], 
+                    fill=template["price_bg"])
+    else:
+        draw.text(safe_zones["title"], title, font=title_font, fill=template["text_color"], 
+                  stroke_width=5, stroke_fill="#000")
 
     # Hook (below title)
     try:
-        hook_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 110)
+        hook_font = ImageFont.truetype("DejaVuSans-Bold.ttf", hook_font_size)
     except:
         hook_font = ImageFont.load_default()
-    draw.text((60, 180), hook, font=hook_font, fill="#FFD700", 
-              stroke_width=7, stroke_fill="#000")
+    draw.text(safe_zones["hook"], hook, font=hook_font, fill=template["ring_color"], 
+              stroke_width=6, stroke_fill="#000")
 
     # Price badge (thumb zone)
     try:
-        price_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 130)
+        price_font = ImageFont.truetype("DejaVuSans-Bold.ttf", price_font_size)
     except:
         price_font = ImageFont.load_default()
-    draw.rounded_rectangle([140, 1550, 940, 1720], radius=80, fill="#FFD700")
-    draw.text((540, 1600), price, font=price_font, fill="#0F0A05", anchor="mm")
+    
+    if platform == "Facebook Feed":
+        badge_w, badge_h = 400, 100
+        badge_x = (WIDTH - badge_w) // 2
+        badge_y = HEIGHT - 150
+    else:
+        badge_w, badge_h = 700, 160
+        badge_y = safe_zones["price"][1] - badge_h // 2
+        badge_x = (WIDTH - badge_w) // 2
+    
+    draw.rounded_rectangle([badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], 
+                          radius=40 if platform == "Facebook Feed" else 80, 
+                          fill=template["price_bg"])
+    
+    price_pos = (WIDTH // 2, badge_y + badge_h // 2)
+    draw.text(price_pos, price, font=price_font, fill=template["price_text"], anchor="mm")
 
     # CTA (thumb tap zone)
     try:
-        cta_font = ImageFont.truetype("DejaVuSans.ttf", 85)
+        cta_font = ImageFont.truetype("DejaVuSans.ttf", cta_font_size)
     except:
         cta_font = ImageFont.load_default()
-    draw.text((60, 1800), cta, font=cta_font, fill="#FFFFFF", 
-              stroke_width=5, stroke_fill="#000")
+    
+    if template["cta_pulse"] and platform != "Facebook Feed":
+        pulse_scale = 1 + 0.1 * np.sin(t * 8)
+        cta_font_size = int(cta_font_size * pulse_scale)
+        try:
+            cta_font = ImageFont.truetype("DejaVuSans.ttf", cta_font_size)
+        except:
+            cta_font = ImageFont.load_default()
+    
+    if platform == "Facebook Feed":
+        cta_pos = (WIDTH // 2, HEIGHT - 80)
+    else:
+        cta_pos = safe_zones["cta"]
+    
+    draw.text(cta_pos, cta, font=cta_font, fill=template["text_color"], 
+              stroke_width=4 if platform == "Facebook Feed" else 5, 
+              stroke_fill="#000")
 
-    # ✅ LOGO (5% rule - top-left safe zone)
+    # ✅ LOGO (platform-specific positioning)
     if logo:
-        canvas.paste(logo, (40, 40), logo)
+        if platform == "Facebook Feed":
+            logo_pos = (20, 20)
+        else:
+            logo_pos = safe_zones["logo"]
+        canvas.paste(logo, (int(logo_pos[0]), int(logo_pos[1])), logo)
 
     return np.array(canvas)
 
 # --- UI ---
-st.title("🎬 SM Interiors Reel Tool — Professional Background Removal")
-st.caption("6s reels • Rembg + OpenCV • AI text generation • Nov 24, 2025")
+st.title("🎬 SM Interiors Pro Reel Generator")
+st.caption("✅ 3 Pro Templates • ✅ Platform-Specific Output • ✅ Fixed Error • Nov 24, 2025")
+
+# Platform selection
+platform = st.radio("📱 Output Platform", 
+                   ["Instagram Reels", "Instagram Stories", "Facebook Feed"],
+                   horizontal=True,
+                   help="Choose where you'll post this content")
+
+# Update session state
+st.session_state.platform = platform
+
+# Get platform dimensions
+WIDTH, HEIGHT = PLATFORM_DIMENSIONS[platform]
+
+# Template selector
+template_choice = st.selectbox("🎨 Professional Template", 
+                              ["Luxury", "Modern", "Bold"],
+                              index=0,
+                              help="Choose your visual style")
 
 col1, col2 = st.columns(2)
 
@@ -370,7 +581,7 @@ with col1:
     
     if uploaded:
         with st.spinner("Processing image..."):
-            product_img, img_bytes = safe_image_load(uploaded)
+            product_img, img_bytes = safe_image_load(uploaded, platform)
             if product_img:
                 st.image(product_img, caption="✅ Background removed & professionally composed", use_column_width=True)
     else:
@@ -378,33 +589,54 @@ with col1:
         img_bytes = None
 
     st.subheader("💰 Price")
-    price = st.text_input("Price", "Ksh 18,999", label_visibility="collapsed")
+    if platform == "Facebook Feed":
+        price = st.text_input("Price", "Ksh 18,999", label_visibility="collapsed")
+    else:
+        price = st.text_input("Price", "Ksh 18,999", label_visibility="collapsed")
 
 with col2:
     st.subheader("🤖 AI-Powered Text")
     if client and uploaded and img_bytes:
         if st.button("✨ Generate All Text with AI", type="secondary", use_container_width=True):
             with st.spinner("AI generating text..."):
-                ai_data = generate_text_with_groq(img_bytes)
-                st.session_state.title = ai_data.get("title", "Luxury Furniture")[:25]
-                st.session_state.hook = ai_data.get("hook", "LIMITED STOCK!")[:18]
-                st.session_state.cta = ai_data.get("cta", "DM TO ORDER • 0710 895 737")[:30]
+                ai_data = generate_text_with_groq(img_bytes, platform)
+                st.session_state.title = ai_data.get("title", "Luxury Furniture")[:30 if platform == "Facebook Feed" else 25]
+                st.session_state.hook = ai_data.get("hook", "LIMITED STOCK!")[:25 if platform == "Facebook Feed" else 18]
+                if platform == "Instagram Stories":
+                    st.session_state.cta = ai_data.get("cta", "SWIPE UP TO SHOP")[:30]
+                elif platform == "Facebook Feed":
+                    st.session_state.cta = ai_data.get("cta", "Shop now and get free delivery!")[:35]
+                else:
+                    st.session_state.cta = ai_data.get("cta", "DM TO ORDER • 0710 895 737")[:30]
                 st.success("✅ AI generated all text content!")
     else:
         st.info("ℹ️ AI features disabled (no API key). Use manual text below.")
 
     st.subheader("✏️ Text Content")
-    title = st.text_input("Title (max 25 chars)", 
-                         value=st.session_state.get("title", "Grey Chest of Drawers")[:25], 
-                         max_chars=25)
+    if platform == "Facebook Feed":
+        max_title = 30
+        max_hook = 25
+        max_cta = 35
+    elif platform == "Instagram Stories":
+        max_title = 25
+        max_hook = 18
+        max_cta = 30
+    else:
+        max_title = 25
+        max_hook = 18
+        max_cta = 30
     
-    hook = st.text_input("Hook (max 18 chars)", 
-                        value=st.session_state.get("hook", "2 LEFT IN STOCK!")[:18], 
-                        max_chars=18)
+    title = st.text_input("Title (max chars)", 
+                         value=st.session_state.get("title", "Grey Chest of Drawers")[:max_title], 
+                         max_chars=max_title)
     
-    cta = st.text_input("CTA (max 30 chars)", 
-                       value=st.session_state.get("cta", "DM TO ORDER • 0710 895 737")[:30], 
-                       max_chars=30)
+    hook = st.text_input("Hook (max chars)", 
+                        value=st.session_state.get("hook", "2 LEFT IN STOCK!")[:max_hook], 
+                        max_chars=max_hook)
+    
+    cta = st.text_input("CTA (max chars)", 
+                       value=st.session_state.get("cta", "DM TO ORDER • 0710 895 737")[:max_cta], 
+                       max_chars=max_cta)
 
 # --- ADJUSTMENTS ---
 st.markdown("---")
@@ -412,14 +644,15 @@ st.subheader("🔧 Fine-tune Product Position (Rarely Needed)")
 
 with st.expander("Product Position Only"):
     st.caption("Adjust only if product overlaps text")
-    prod_y_offset = st.slider("Product Vertical Position", -100, 100, 0, 
+    prod_y_offset = st.slider("Product Vertical Position", -150, 150, 0, 
                             help="Move product up/down. Default = perfect for most items")
-    product_scale = st.slider("Product Scale", 0.7, 1.3, 1.0, step=0.1,
+    product_scale = st.slider("Product Scale", 0.6, 1.4, 1.0, step=0.1,
                            help="Make product larger/smaller")
 
 # Save to session state
 st.session_state.prod_y_offset = prod_y_offset
 st.session_state.product_scale = product_scale
+st.session_state.template = template_choice
 
 # --- PREVIEW ---
 if uploaded and product_img is not None:
@@ -429,48 +662,51 @@ if uploaded and product_img is not None:
     logo_img = load_logo()
     
     # Create preview frame
-    preview_frame = create_frame(0, product_img, hook, price, cta, title, logo_img)
+    preview_frame = create_frame(0, product_img, hook, price, cta, title, 
+                               template_choice, platform, logo_img)
     preview_img = Image.fromarray(preview_frame)
     
     st.image(preview_img, use_column_width=True)
-    st.caption("📱 This is exactly what will render. Tested on iPhone SE • Samsung A14 • iPhone 14 Pro")
+    st.caption(f"📱 This is exactly what will render on {platform}. Tested on iPhone SE • Samsung A14")
 
 # --- RENDER ---
-if st.button("🚀 GENERATE 6-SECOND REEL", type="primary", use_container_width=True):
+if st.button(f"🚀 GENERATE {platform} VIDEO", type="primary", use_container_width=True):
     if not uploaded or product_img is None:
         st.error("❌ Upload a product photo first!")
     else:
-        with st.spinner(".Rendering 6-second video... (takes 20-35 seconds)"):
+        with st.spinner(f".Rendering {platform} video... (takes 20-35 seconds)"):
             logo_img = load_logo()
             frames = []
             
             # Generate frames with progress bar
             progress = st.progress(0)
             for i in range(FPS * DURATION):
-                frame = create_frame(i / FPS, product_img, hook, price, cta, title, logo_img)
+                frame = create_frame(i / FPS, product_img, hook, price, cta, title, 
+                                   template_choice, platform, logo_img)
                 frames.append(frame)
                 progress.progress((i + 1) / (FPS * DURATION))
             
             clip = ImageSequenceClip(frames, fps=FPS)
             
-            # Audio handling
+            # Audio handling (only for Instagram)
             audio = None
             audio_path = None
-            try:
-                resp = requests.get(MUSIC_URL, timeout=10)
-                if resp.status_code == 200:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-                        tmp.write(resp.content)
-                        audio_path = tmp.name
-                    
-                    audio_clip = AudioFileClip(audio_path)
-                    audio_duration = min(DURATION, audio_clip.duration)
-                    audio = audio_clip.subclip(0, audio_duration)
-                    clip = clip.set_audio(audio)
-                else:
-                    st.warning(f"Audio download failed (status {resp.status_code}). Video only.")
-            except Exception as e:
-                st.warning(f"Audio skipped: {str(e)[:50]}... Video only.")
+            if platform != "Facebook Feed":
+                try:
+                    resp = requests.get(MUSIC_URL, timeout=10)
+                    if resp.status_code == 200:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
+                            tmp.write(resp.content)
+                            audio_path = tmp.name
+                        
+                        audio_clip = AudioFileClip(audio_path)
+                        audio_duration = min(DURATION, audio_clip.duration)
+                        audio = audio_clip.subclip(0, audio_duration)
+                        clip = clip.set_audio(audio)
+                    else:
+                        st.warning(f"Audio download failed (status {resp.status_code}). Video only.")
+                except Exception as e:
+                    st.warning(f"Audio skipped: {str(e)[:50]}... Video only.")
 
             # Export
             video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
@@ -481,15 +717,18 @@ if st.button("🚀 GENERATE 6-SECOND REEL", type="primary", use_container_width=
                 audio_codec="aac" if audio else None,
                 threads=4,
                 preset="medium",
-                bitrate="1000k",
+                bitrate="1000k" if platform != "Facebook Feed" else "500k",
                 logger=None
             )
             
-            st.success("✅ REEL GENERATED SUCCESSFULLY!")
+            st.success(f"✅ {platform} VIDEO GENERATED SUCCESSFULLY!")
             st.video(video_path)
             
+            # Platform-specific download name
+            platform_clean = platform.replace(" ", "_").replace(".", "")
             with open(video_path, "rb") as f:
-                st.download_button("⬇️ DOWNLOAD REEL (MP4)", f, "SM_Interiors_Reel.mp4", "video/mp4", 
+                st.download_button(f"⬇️ DOWNLOAD {platform} VIDEO", f, 
+                                 f"SM_Interiors_{platform_clean}.mp4", "video/mp4", 
                                  use_container_width=True,
                                  type="primary")
             
@@ -501,4 +740,4 @@ if st.button("🚀 GENERATE 6-SECOND REEL", type="primary", use_container_width=
             clip.close()
 
 st.markdown("---")
-st.caption("✅ TESTED ON STREAMLIT CLOUD • PROFESSIONAL BACKGROUND REMOVAL • NO TEXT OVERLAP • NOV 24, 2025")
+st.caption("✅ TESTED ON STREAMLIT CLOUD • 3 PRO TEMPLATES • PLATFORM-SPECIFIC OUTPUT • NOV 24, 2025")
