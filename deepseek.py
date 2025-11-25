@@ -338,11 +338,12 @@ with col2:
     music_key = st.selectbox("Background Music", list(MUSIC_FILES.keys()), index=0)
     
     # Template preview
-    st.info(f"**{template}** - {{
-        'Modern Minimal': 'Clean lines, minimalist design',
-        'Luxury Gold': 'Elegant gold accents, premium feel', 
-        'Geometric Art': 'Dynamic shapes, artistic layout'
-    }[template]}")
+template_descriptions = {
+    'Modern Minimal': 'Clean lines, minimalist design',
+    'Luxury Gold': 'Elegant gold accents, premium feel', 
+    'Geometric Art': 'Dynamic shapes, artistic layout'
+}
+st.info(f"**{template}** - {template_descriptions[template]}")
 
 # Auto-split text preview
 if 'tip_text' in locals():
