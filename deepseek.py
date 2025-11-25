@@ -1,333 +1,322 @@
 import streamlit as st
-import numpy as np
-import imageio
-import tempfile
-import base64
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
+import tempfile, os, numpy as np, io
+from moviepy.editor import ImageSequenceClip, AudioFileClip, TextClip, CompositeVideoClip
 import math
-from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
-import io
-import requests
-import json
-from groq import Groq
 
-# Set page config
-st.set_page_config(page_title="AI Animation", layout="centered")
+st.set_page_config(page_title="SM Interiors DIY Tips Animator", layout="wide", page_icon="💡")
 
-# Use groq_key from secrets
-GROQ_API_KEY = st.secrets.get("groq_key", "")
-client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-
-# Constants from the reference code
 WIDTH, HEIGHT = 1080, 1920
-FPS, DURATION = 30, 6
+FPS, DURATION = 30, 8  # 8 seconds for tips
 
-class GroqContentGenerator:
-    def __init__(self, client):
-        self.client = client
-    
-    def generate_diy_tips(self, topic):
-        if not self.client:
-            return self.get_fallback_tips(topic)
-        
-        try:
-            chat_completion = self.client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Generate 3 practical DIY tips about {topic}. Each under 120 characters. Return as JSON array."
-                    }
-                ],
-                model="llama-3.1-8b-instant",
-                temperature=0.7,
-                max_tokens=300,
-            )
-            
-            response = chat_completion.choices[0].message.content.strip()
-            try:
-                start_idx = response.find('[')
-                end_idx = response.rfind(']') + 1
-                if start_idx != -1:
-                    return json.loads(response[start_idx:end_idx])
-            except:
-                return self.get_fallback_tips(topic)
-        except:
-            pass
-        return self.get_fallback_tips(topic)
-    
-    def get_fallback_tips(self, topic):
-        return [
-            "Measure twice, cut once - saves time and materials.",
-            "Use the right tool for the job - prevents damage and improves results.",
-            "Safety first - always wear protective equipment when working."
-        ]
-
-class ProfessionalAnimationGenerator:
-    def __init__(self):
-        self.logo = self.load_logo()
-    
-    def load_logo(self):
-        try:
-            response = requests.get("https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037")
-            logo = Image.open(io.BytesIO(response.content))
-            if logo.mode != 'RGBA': 
-                logo = logo.convert('RGBA')
-            return logo.resize((300, 150), Image.Resampling.LANCZOS)
-        except:
-            img = Image.new('RGBA', (300, 150), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(img)
-            draw.rectangle([10, 30, 290, 120], fill=(245, 215, 140, 180))
-            return img
-
-    def create_frame(self, t, text, template):
-        """Create professional frame with vertical text animation"""
-        # Create background with dynamic elements
-        canvas = Image.new("RGB", (WIDTH, HEIGHT), template["bg_color"])
-        draw = ImageDraw.Draw(canvas)
-        
-        # Add animated background elements (like the rings in reference)
-        for cx, cy, r in [(540, 960, 600), (660, 840, 800)]:
-            pulse = 1 + 0.1 * math.sin(t * 3)
-            draw.ellipse(
-                [cx-r*pulse, cy-r*pulse, cx+r*pulse, cy+r*pulse], 
-                outline=template["ring_color"], 
-                width=4
-            )
-        
-        # Load fonts with proper sizing
-        try:
-            title_font = ImageFont.truetype("arial.ttf", 80)
-            text_font = ImageFont.truetype("arial.ttf", 60)
-        except:
-            title_font = ImageFont.load_default()
-            text_font = ImageFont.load_default()
-        
-        # Break text into lines for vertical animation
-        lines = self.break_text_to_lines(text, text_font, WIDTH - 200)
-        
-        # Apply vertical animation
-        animated_lines = self.apply_vertical_animation(lines, t, DURATION)
-        
-        # Calculate starting position (top of screen)
-        start_y = 300
-        
-        # Draw animated text from top to bottom
-        for i, line_data in enumerate(animated_lines):
-            line, alpha = line_data
-            if not line:
-                continue
-                
-            # Calculate line position with smooth animation
-            line_y = start_y + (i * 120)
-            
-            # Apply entrance animation
-            if alpha < 1.0:
-                line_y += (1 - alpha) * 50  # Slide in from bottom
-                
-            # Calculate text width for centering
-            try:
-                bbox = draw.textbbox((0, 0), line, font=text_font)
-                text_width = bbox[2] - bbox[0]
-            except:
-                text_width = len(line) * 30
-                
-            x = (WIDTH - text_width) // 2
-            
-            # Draw text with professional effects
-            text_color = self.apply_alpha(template["text_color"], alpha)
-            shadow_color = self.apply_alpha("#000000", alpha * 0.5)
-            
-            # Text shadow for readability
-            draw.text((x + 3, line_y + 3), line, font=text_font, fill=shadow_color)
-            # Main text
-            draw.text((x, line_y), line, font=text_font, fill=text_color)
-        
-        # Add logo
-        if self.logo:
-            canvas.paste(self.logo, (WIDTH - 330, 30), self.logo)
-        
-        return np.array(canvas)
-
-    def break_text_to_lines(self, text, font, max_width):
-        """Professional text wrapping with pixel-perfect measurements"""
-        words = text.split()
-        lines = []
-        current_line = []
-        
-        temp_img = Image.new('RGB', (1, 1))
-        temp_draw = ImageDraw.Draw(temp_img)
-        
-        for word in words:
-            current_line.append(word)
-            test_line = ' '.join(current_line)
-            
-            try:
-                bbox = temp_draw.textbbox((0, 0), test_line, font=font)
-                line_width = bbox[2] - bbox[0]
-            except:
-                line_width = len(test_line) * font.size // 1.8
-            
-            if line_width > max_width:
-                if len(current_line) == 1:
-                    lines.append(word)
-                    current_line = []
-                else:
-                    current_line.pop()
-                    lines.append(' '.join(current_line))
-                    current_line = [word]
-        
-        if current_line:
-            lines.append(' '.join(current_line))
-        
-        return lines
-
-    def apply_vertical_animation(self, lines, t, duration):
-        """Professional vertical animation with smooth transitions"""
-        total_lines = len(lines)
-        lines_per_second = total_lines / (duration * 0.8)  # 80% for text reveal
-        
-        current_line_index = t * lines_per_second
-        animated_lines = []
-        
-        for i, line in enumerate(lines):
-            line_progress = (current_line_index - i)
-            
-            if line_progress < 0:
-                # Line hasn't started yet
-                animated_lines.append(("", 0.0))
-            elif line_progress < 1.0:
-                # Line is animating in
-                alpha = line_progress
-                # Optional: character-by-character reveal within line
-                chars_to_show = int(len(line) * alpha)
-                animated_line = line[:chars_to_show]
-                animated_lines.append((animated_line, alpha))
-            else:
-                # Line is fully visible
-                animated_lines.append((line, 1.0))
-        
-        return animated_lines
-
-    def apply_alpha(self, color, alpha):
-        """Apply alpha to hex color"""
-        if isinstance(color, str) and color.startswith('#'):
-            r = int(color[1:3], 16)
-            g = int(color[3:5], 16)
-            b = int(color[5:7], 16)
-            return (r, g, b)
-        return color
-
-# Professional templates like in reference code
-TEMPLATES = {
-    "Professional": {
-        "bg_color": "#0F0A05",
-        "ring_color": "#FFD700", 
-        "text_color": "#FFFFFF",
-    },
-    "Modern": {
-        "bg_color": "#1A1A2E",
-        "ring_color": "#00D4FF",
-        "text_color": "#E6E6E6",
-    },
-    "Minimal": {
-        "bg_color": "#FFFFFF",
-        "ring_color": "#333333",
-        "text_color": "#000000",
-    }
+# LOCAL AUDIO (same as reel tool)
+AUDIO_DIR = "audio"
+MUSIC_FILES = {
+    "Gold Luxury": "gold_luxury.mp3",
+    "Viral Pulse": "viral_pulse.mp3",
+    "Elegant Flow": "elegant_flow.mp3",
 }
 
-def generate_video(text, template, output_path):
-    """Professional video generation like reference code"""
-    generator = ProfessionalAnimationGenerator()
+LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png"
+
+@st.cache_resource
+def load_logo():
+    """Load logo with error handling"""
+    try:
+        import requests
+        resp = requests.get(LOGO_URL, timeout=5)
+        if resp.status_code == 200:
+            logo = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((200, 100))
+            return logo
+    except:
+        # Fallback: Create text logo if network fails
+        fallback = Image.new("RGBA", (200, 100), (0,0,0,0))
+        draw = ImageDraw.Draw(fallback)
+        try:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 60)
+        except:
+            font = ImageFont.load_default()
+        draw.text((10, 20), "SM", font=font, fill="#FFD700")
+        return fallback
+
+def create_diy_background():
+    """Create branded background for DIY tips"""
+    bg = Image.new("RGB", (WIDTH, HEIGHT), "#0F0A05")
+    draw = ImageDraw.Draw(bg)
     
-    total_frames = FPS * DURATION
+    # Subtle geometric patterns
+    for i in range(0, WIDTH, 100):
+        draw.line([(i, 0), (i, HEIGHT)], fill="#1A1208", width=1)
+    for i in range(0, HEIGHT, 100):
+        draw.line([(0, i), (WIDTH, i)], fill="#1A1208", width=1)
+    
+    # Gold accent circles
+    for cx, cy, r in [(200, 400, 80), (880, 1200, 120), (900, 600, 60)]:
+        draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline="#FFD700", width=3)
+    
+    return bg
+
+def create_text_frame(t, tip_lines, tip_title, current_step, total_steps, logo=None):
+    """Create animated frame for DIY tips"""
+    bg = create_diy_background()
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    draw = ImageDraw.Draw(canvas)
     
     try:
-        with imageio.get_writer(
-            output_path, 
-            fps=FPS, 
-            codec="libx264", 
-            quality=8,
-            pixelformat="yuv420p"
-        ) as writer:
-            for frame_idx in range(total_frames):
-                t = frame_idx / FPS
-                frame = generator.create_frame(t, text, template)
-                writer.append_data(frame)
-                
-                if frame_idx % 10 == 0:
-                    yield frame_idx / total_frames
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 80)
+        tip_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 64)
+        step_font = ImageFont.truetype("DejaVuSans.ttf", 48)
+    except:
+        title_font = ImageFont.load_default().font_variant(size=80)
+        tip_font = ImageFont.load_default().font_variant(size=64)
+        step_font = ImageFont.load_default().font_variant(size=48)
+    
+    # Animated title (slide in from top)
+    title_y = 100 + int(50 * math.sin(t * 2))  # Subtle bounce effect
+    
+    # Title with shadow
+    draw.text((61, title_y+1), tip_title, font=title_font, fill="#000000")
+    draw.text((60, title_y), tip_title, font=title_font, fill="#FFD700")
+    
+    # Step indicator
+    step_text = f"Step {current_step} of {total_steps}"
+    draw.text((WIDTH-400, title_y), step_text, font=step_font, fill="#FFFFFF")
+    
+    # Progress bar
+    progress_width = 800
+    progress_height = 15
+    progress_x = (WIDTH - progress_width) // 2
+    progress_y = title_y + 120
+    
+    # Progress bar background
+    draw.rounded_rectangle([progress_x, progress_y, progress_x + progress_width, progress_y + progress_height], 
+                          radius=7, fill="#333333")
+    
+    # Progress fill (animated)
+    progress_fill = (current_step - 1) / total_steps
+    fill_width = int(progress_width * progress_fill)
+    if fill_width > 0:
+        draw.rounded_rectangle([progress_x, progress_y, progress_x + fill_width, progress_y + progress_height], 
+                              radius=7, fill="#FFD700")
+    
+    # Tip lines with staggered animation
+    base_y = 600
+    line_height = 100
+    
+    for i, line in enumerate(tip_lines):
+        # Each line enters with a slight delay
+        line_delay = i * 0.3
+        line_time = max(0, t - line_delay)
         
-        yield 1.0
-    except Exception as e:
-        st.error(f"Video generation error: {e}")
-        yield 1.0
+        if line_time < 1.0:  # Entrance animation
+            # Slide from right with fade
+            offset_x = int((1 - line_time) * 100)
+            alpha = int(255 * line_time)
+        else:
+            offset_x = 0
+            alpha = 255
+        
+        # Text position with subtle hover
+        y_pos = base_y + (i * line_height) + int(5 * math.sin(t * 3 + i))
+        x_pos = (WIDTH // 2) + offset_x
+        
+        # Text with semi-transparent background for readability
+        if alpha > 0:
+            # Get text bounding box
+            bbox = draw.textbbox((0, 0), line, font=tip_font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            
+            # Background for text
+            bg_padding = 20
+            bg_rect = [
+                x_pos - text_width//2 - bg_padding,
+                y_pos - text_height//2 - bg_padding//2,
+                x_pos + text_width//2 + bg_padding,
+                y_pos + text_height//2 + bg_padding//2
+            ]
+            draw.rounded_rectangle(bg_rect, radius=15, fill=(15, 10, 5, 200))
+            
+            # Draw text with gold color and shadow
+            text_color = (255, 215, 0, alpha)
+            shadow_color = (0, 0, 0, alpha)
+            
+            draw.text((x_pos - text_width//2 + 2, y_pos - text_height//2 + 2), 
+                     line, font=tip_font, fill=shadow_color)
+            draw.text((x_pos - text_width//2, y_pos - text_height//2), 
+                     line, font=tip_font, fill=text_color)
+    
+    # CTA at bottom (pulsing effect)
+    cta_alpha = int(128 + 127 * math.sin(t * 4))
+    cta_text = "👉 SWIPE UP FOR MORE DIY TIPS"
+    cta_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 50) if hasattr(ImageFont, 'truetype') else ImageFont.load_default().font_variant(size=50)
+    
+    cta_bbox = draw.textbbox((0, 0), cta_text, font=cta_font)
+    cta_width = cta_bbox[2] - cta_bbox[0]
+    cta_x = (WIDTH - cta_width) // 2
+    cta_y = HEIGHT - 150
+    
+    draw.text((cta_x, cta_y), cta_text, font=cta_font, fill=(255, 255, 255, cta_alpha))
+    
+    # Logo
+    if logo:
+        canvas.paste(logo, (WIDTH - 220, 50), logo)
+    
+    # Composite onto background
+    bg.paste(canvas, (0, 0), canvas)
+    
+    return np.array(bg)
 
-def main():
-    # Initialize AI
-    ai_generator = GroqContentGenerator(client)
+def split_text_into_lines(text, max_chars_per_line=25):
+    """Split long text into multiple lines for better readability"""
+    words = text.split()
+    lines = []
+    current_line = []
     
-    col1, col2 = st.columns([2, 1])
+    for word in words:
+        test_line = ' '.join(current_line + [word])
+        if len(test_line) <= max_chars_per_line:
+            current_line.append(word)
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+            current_line = [word]
     
-    with col1:
-        if client:
-            topic = st.text_input("DIY Topic", placeholder="e.g., woodworking, home repair")
-            if st.button("Generate Tips") and topic:
-                with st.spinner("Generating professional tips..."):
-                    tips = ai_generator.generate_diy_tips(topic)
-                    if tips:
-                        st.session_state.ai_tips = tips
-                        st.session_state.selected_tip = tips[0]
-        
-        if 'ai_tips' in st.session_state:
-            selected = st.selectbox("Select tip", st.session_state.ai_tips)
-            st.session_state.animation_text = selected
+    if current_line:
+        lines.append(' '.join(current_line))
     
-    with col2:
-        template_choice = st.selectbox("Style", list(TEMPLATES.keys()))
-        text_color = st.color_picker("Text Color", "#FAF5E6")
+    return lines
+
+# UI
+st.title("💡 SM Interiors DIY Tips Animator")
+st.caption("Create engaging DIY tutorial videos for social media • 8 seconds per tip")
+
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("📝 DIY Tip Content")
     
-    # Text input
-    default_text = st.session_state.get('animation_text', "Create professional content with optimized vertical animations.")
-    text_input = st.text_area("Text Content", default_text, height=100)
+    tip_title = st.text_input("Tip Title (max 25 chars)", "PRO TIP", max_chars=25)
     
-    # Preview
-    if st.button("Preview Frame"):
-        generator = ProfessionalAnimationGenerator()
-        template = TEMPLATES[template_choice]
-        preview_frame = generator.create_frame(0, text_input, template)
-        st.image(Image.fromarray(preview_frame), caption="Preview", use_column_width=True)
+    tip_text = st.text_area(
+        "DIY Tip Description", 
+        "Use vinegar and baking soda to clean stubborn stains on furniture",
+        height=100,
+        help="Describe the DIY tip step by step"
+    )
     
-    # Generate video
-    if st.button("Generate Professional Animation"):
-        if not text_input.strip():
-            st.warning("Enter text content")
-            return
+    total_steps = st.slider("Total Steps in Series", 1, 10, 3, 
+                           help="This helps show progress (Step X of Y)")
+    
+    current_step = st.slider("Current Step Number", 1, total_steps, 1,
+                            help="Which step is this in the series?")
+    
+    music_key = st.selectbox("Background Music", list(MUSIC_FILES.keys()), index=0)
+
+with col2:
+    st.subheader("🎬 Preview Settings")
+    
+    # Auto-split text preview
+    tip_lines = split_text_into_lines(tip_text)
+    st.write("**Text will appear as:**")
+    for i, line in enumerate(tip_lines):
+        st.write(f"Line {i+1}: `{line}`")
+    
+    if len(tip_lines) > 4:
+        st.warning("⚠️ Consider shortening your tip - too many lines may look crowded")
+    
+    st.info("💡 **Pro Tip:** Keep each line under 25 characters for best mobile readability")
+
+# LIVE PREVIEW
+st.markdown("---")
+st.subheader("📱 LIVE PREVIEW")
+
+logo_img = load_logo()
+preview_time = st.slider("Preview Animation Time", 0.0, 3.0, 1.0, 0.1,
+                        help="Drag to see different animation states")
+
+preview_frame = create_text_frame(
+    t=preview_time,
+    tip_lines=tip_lines,
+    tip_title=tip_title,
+    current_step=current_step,
+    total_steps=total_steps,
+    logo=logo_img
+)
+
+st.image(Image.fromarray(preview_frame), use_column_width=True)
+st.caption("This shows how your tip will look at this moment in the animation")
+
+# GENERATE VIDEO
+if st.button("🚀 GENERATE DIY TIP VIDEO", type="primary", use_container_width=True):
+    if not tip_text.strip():
+        st.error("Please enter a DIY tip!")
+    else:
+        with st.spinner("Creating your DIY tip video... (takes ~30 seconds)"):
+            frames = []
+            logo_img = load_logo()
             
-        template = TEMPLATES[template_choice]
-        
-        with st.spinner("Rendering professional animation..."):
-            tmp_path = Path(tempfile.mkdtemp()) / "professional_animation.mp4"
+            # Generate frames for full duration
+            for i in range(FPS * DURATION):
+                t = i / FPS  # Time in seconds
+                frame = create_text_frame(t, tip_lines, tip_title, current_step, total_steps, logo_img)
+                frames.append(frame)
             
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            # Create video clip
+            clip = ImageSequenceClip(frames, fps=FPS)
             
-            for progress in generate_video(text_input, template, tmp_path):
-                progress_bar.progress(progress)
-                status_text.text(f"Rendering: {int(progress * 100)}%")
+            # Add audio
+            audio_path = os.path.join(AUDIO_DIR, MUSIC_FILES[music_key])
+            if os.path.exists(audio_path):
+                try:
+                    audio = AudioFileClip(audio_path).subclip(0, min(DURATION, AudioFileClip(audio_path).duration))
+                    clip = clip.set_audio(audio)
+                except Exception as e:
+                    st.warning(f"Audio skipped: {e}. Using video only.")
             
-            # Display result
-            with open(tmp_path, "rb") as f:
-                video_bytes = f.read()
-                st.video(video_bytes)
-                
+            # Export
+            video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            clip.write_videofile(
+                video_path,
+                fps=FPS,
+                codec="libx264",
+                audio_codec="aac" if os.path.exists(audio_path) else None,
+                threads=4,
+                preset="fast",
+                logger=None
+            )
+            
+            st.success("✅ DIY TIP VIDEO READY!")
+            st.video(video_path)
+            
+            with open(video_path, "rb") as f:
                 st.download_button(
-                    "Download MP4",
-                    video_bytes,
-                    "professional_animation.mp4",
-                    "video/mp4",
+                    "⬇️ DOWNLOAD DIY TIP VIDEO", 
+                    f, 
+                    f"SM_DIY_Tip_{current_step}_of_{total_steps}.mp4", 
+                    "video/mp4", 
                     use_container_width=True
                 )
+            
+            # Cleanup
+            os.unlink(video_path)
+            clip.close()
+            if 'audio' in locals():
+                audio.close()
 
-if __name__ == "__main__":
-    main()
+# BATCH TIP GENERATOR
+st.markdown("---")
+st.subheader("🔄 Multiple Tips Generator")
+
+st.info("**Coming Soon:** Generate a series of DIY tip videos automatically!")
+
+st.markdown("""
+### 💡 Best Practices for DIY Tip Videos:
+1. **Keep it short** - One clear tip per video
+2. **Use simple language** - Easy to understand
+3. **Show progress** - Use step numbers for series
+4. **Brand consistency** - Gold and brown colors
+5. **Mobile first** - Vertical format, large text
+""")
+
+st.caption("✅ OPTIMIZED FOR INSTAGRAM REELS & TIKTOK • BRAND-CONSISTENT • EASY TO USE")
