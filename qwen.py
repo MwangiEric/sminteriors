@@ -1,6 +1,6 @@
 import streamlit as st
 from moviepy.editor import VideoClip
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont,ImageFilter
 import numpy as np
 import math
 import tempfile
