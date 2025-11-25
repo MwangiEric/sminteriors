@@ -13,7 +13,7 @@ FPS, DURATION = 30, 8
 # LOCAL AUDIO
 AUDIO_DIR = "audio"
 MUSIC_FILES = {
-    "Gold Luxury": "gold_luxury.mp3",
+    "Gold Luxury": "https://ik.imagekit.io/ericmwangi/advertising-music-308403.mp3",
     "Viral Pulse": "viral_pulse.mp3",
     "Elegant Flow": "elegant_flow.mp3",
 }
