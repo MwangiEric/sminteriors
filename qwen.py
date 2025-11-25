@@ -1,28 +1,72 @@
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
-import tempfile, os, numpy as np, io
+import tempfile, os, numpy as np, io, json, random, gc, re
 from moviepy.editor import ImageSequenceClip, AudioFileClip
+import math
+import groq
 import requests
-import base64
-import rembg
-from groq import Groq
 
-st.set_page_config(page_title="SM Interiors Reel Tool", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="SM Interiors DIY Tips Animator", layout="wide", page_icon="💡")
 
 WIDTH, HEIGHT = 1080, 1920
-FPS, DURATION = 30, 6  # 6 seconds
+FPS = 30
 
-# Your hosted MP3
-MUSIC_URL = "https://ik.imagekit.io/ericmwangi/advertising-music-308403.mp3"
+# LOCAL AUDIO
+AUDIO_DIR = "audio"
+MUSIC_FILES = {
+    "Gold Luxury": "gold_luxury.mp3",
+    "Viral Pulse": "viral_pulse.mp3", 
+    "Elegant Flow": "elegant_flow.mp3",
+}
+
 LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png"
 
-# Initialize Groq
-try:
-    GROQ_API_KEY = st.secrets["groq_key"]
-    client = Groq(api_key=GROQ_API_KEY)
-except:
-    client = None
-    st.warning("⚠️ No Groq API key found. AI text generation disabled.")
+# DIY Categories
+DIY_CATEGORIES = {
+    "furniture": "🪑 Furniture Care & Restoration",
+    "cleaning": "🧽 Cleaning & Maintenance", 
+    "decor": "🎨 Decor & Styling",
+    "organization": "📦 Organization Solutions",
+    "lighting": "💡 Lighting & Ambiance",
+    "woodworking": "🔨 Woodworking Basics",
+    "upholstery": "🛋️ Upholstery & Fabrics",
+    "paint": "🎨 Painting Techniques"
+}
+
+# FONT HELPER (SAFE LOADING)
+def get_font(size, bold=False):
+    candidates = []
+    if bold:
+        candidates = [
+            "DejaVuSans-Bold.ttf",
+            "arialbd.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "segoeui.ttf"
+        ]
+    else:
+        candidates = [
+            "DejaVuSans.ttf",
+            "arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "segoeui.ttf"
+        ]
+    
+    for font_path in candidates:
+        try:
+            return ImageFont.truetype(font_path, size)
+        except:
+            continue
+    # Fallback: load default (won't scale well, but won't crash)
+    return ImageFont.load_default()
+
+# Initialize Groq client
+@st.cache_resource
+def init_groq_client():
+    if 'groq_key' in st.secrets:
+        return groq.Client(api_key=st.secrets['groq_key'])
+    else:
+        st.error("❌ Groq API key not found. Please add 'groq_key' to Streamlit secrets.")
+        return None
 
 @st.cache_resource
 def load_logo():
@@ -31,423 +75,499 @@ def load_logo():
         if resp.status_code == 200:
             logo = Image.open(io.BytesIO(resp.content)).convert("RGBA").resize((280, 140))
             return logo
-    except:
-        # Fallback logo
-        fallback = Image.new("RGBA", (280, 140), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(fallback)
-        font = ImageFont.load_default()
-        draw.text((0, 0), "SM", font=font, fill="#FFD700")
-        return fallback
-
-def remove_background(img):
-    """Professional background removal using rembg"""
-    try:
-        # Convert to numpy array for rembg
-        img_np = np.array(img)
-        
-        # Remove background
-        img_no_bg = rembg.remove(img_np, session=rembg.new_session())
-        
-        # Convert back to PIL
-        img_pil = Image.fromarray(img_no_bg)
-        
-        # Process transparency
-        if img_pil.mode != 'RGBA':
-            img_pil = img_pil.convert('RGBA')
-        
-        # Remove black edges
-        img_pil = remove_black_edges(img_pil)
-        
-        return img_pil
     except Exception as e:
-        return img  # Return original if background removal fails
+        st.warning(f"⚠️ Failed to load logo: {e}. Using fallback.")
+    fallback = Image.new("RGBA", (280, 140), (0,0,0,0))
+    draw = ImageDraw.Draw(fallback)
+    font = get_font(80, bold=True)
+    draw.text((10, 30), "SM", font=font, fill="#FFD700")
+    return fallback
 
-def remove_black_edges(img):
-    """Clean up black edges after background removal"""
+def calculate_duration(tip_text):
+    word_count = len(tip_text.split())
+    if word_count <= 10:
+        return 5
+    elif word_count <= 25:
+        return 8
+    elif word_count <= 40:
+        return 12
+    else:
+        return min(15, max(10, word_count // 3))  # Cap at 15s
+
+def clean_hashtags(raw_hashtags):
+    tags = re.findall(r'#\S+', raw_hashtags)
+    clean_tags = []
+    for tag in tags:
+        clean = re.sub(r'[^\w#]', '', tag)
+        if len(clean) > 1:
+            clean_tags.append(clean)
+    return ' '.join(clean_tags[:15])  # Max 15
+
+def extract_json_from_text(text):
     try:
-        # Convert to numpy
-        img_np = np.array(img)
-        
-        # Create mask of non-transparent pixels
-        alpha = img_np[:, :, 3] > 0
-        
-        # Find bounding box of non-transparent area
-        y, x = np.where(alpha)
-        if len(y) == 0 or len(x) == 0:
-            return img
-        
-        min_y, max_y = int(np.min(y)), int(np.max(y))
-        min_x, max_x = int(np.min(x)), int(np.max(x))
-        
-        # Crop to bounding box
-        img_cropped = img.crop((min_x, min_y, max_x, max_y))
-        
-        # Add padding (10% of the product size)
-        pad = max(img_cropped.width, img_cropped.height) // 10
-        new_size = (img_cropped.width + 2*pad, img_cropped.height + 2*pad)
-        padded = Image.new('RGBA', new_size, (0, 0, 0, 0))
-        padded.paste(img_cropped, (pad, pad), img_cropped)
-        
-        return padded
+        return json.loads(text)
     except:
-        return img  # Return original if edge removal fails
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except:
+                pass
+    return None
 
-def compose_product_image(img):
-    """Professional image composition"""
-    try:
-        # Remove background
-        img = remove_background(img)
-        
-        # Enhance contrast and sharpness
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        img = ImageEnhance.Contrast(img).enhance(1.3)
-        img = ImageEnhance.Sharpness(img).enhance(1.8)
-        img = img.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
-        
-        # Professional composition rules
-        # 1. Maintain aspect ratio
-        # 2. Size product to 85% of frame width (with padding)
-        # 3. Center vertically in the safe zone
-        
-        # Calculate target size
-        max_width = int(WIDTH * 0.85)
-        ratio = max_width / img.width
-        new_height = int(img.height * ratio)
-        
-        # Resize
-        img = img.resize((max_width, new_height), Image.LANCZOS)
-        
-        # Create background
-        background = Image.new('RGBA', (WIDTH, HEIGHT), (0, 0, 0, 0))
-        
-        # Center horizontally
-        x = int((WIDTH - max_width) // 2)
-        
-        # Center vertically in safe zone (350-700px from top)
-        y = int(500)  # Perfect center for most products
-        
-        # Paste product
-        background.paste(img, (x, y), img)
-        
-        return background
-    except:
-        return img  # Return original if composition fails
+def generate_diy_content(client, category="furniture"):
+    category_name = DIY_CATEGORIES[category].split(" ", 1)[1]  # Skip emoji
+    prompt = f"""
+    As an interior design expert for SM Interiors, generate a DIY tip about {category_name}:
+    1. A catchy DIY tip title (max 5 words)
+    2. A practical DIY tip description (adjust length based on complexity)
+    3. An engaging social media caption
+    4. Relevant hashtags (10-15 hashtags starting with #)
 
-def safe_image_load(uploaded):
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-            tmp_file.write(uploaded.read())
-            tmp_path = tmp_file.name
-
-        img = Image.open(tmp_path).convert("RGBA")
-        
-        # Auto-resize for processing
-        max_dim = 1500  # Higher for better quality
-        if max(img.width, img.height) > max_dim:
-            ratio = max_dim / max(img.width, img.height)
-            new_size = (int(img.width * ratio), int(img.height * ratio))
-            img = img.resize(new_size, Image.LANCZOS)
-
-        # Process image
-        processed_img = compose_product_image(img)
-        os.unlink(tmp_path)
-
-        # Save to bytes for Groq
-        img_bytes = io.BytesIO()
-        processed_img.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-
-        return processed_img.resize((850, 850), Image.LANCZOS), img_bytes.getvalue()
-
-    except Exception as e:
-        st.error(f"Image processing failed: {e}. Try a simple JPG/PNG under 5MB.")
-        return None, None
-
-def generate_text_with_groq(image_bytes):
-    """Generate all text content using Groq"""
-    if not client:
-        return {
-            "title": "Luxury Furniture",
-            "hook": "LIMITED STOCK!",
-            "cta": "DM TO ORDER • 0710 895 737"
-        }
+    Make it practical and valuable for homeowners.
+    
+    Respond ONLY with valid JSON:
+    {{
+        "title": "creative title here",
+        "tip": "detailed tip description here",
+        "caption": "engaging social media caption here",
+        "hashtags": "#DIY #HomeDecor #InteriorDesign #Furniture #HomeImprovement #DesignTips #BudgetFriendly #HomeHacks #InteriorInspo #SMInteriors"
+    }}
+    """
     
     try:
-        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-
         chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """
-Analyze this furniture product image and generate:
-
-TITLE: [clean, descriptive product name (max 25 chars)]
-HOOK: [short, urgent phrase for Reels (max 18 chars)]
-CTA: [action-oriented with contact (max 30 chars)]
-
-Example:
-TITLE: Grey Chest of Drawers
-HOOK: 2 LEFT IN STOCK!
-CTA: ORDER NOW • 0710 895 737
-"""
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_b64}"
-                            }
-                        }
-                    ],
-                }
-            ],
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
-            temperature=0.7,
-            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.1-8b-instant",
+            temperature=0.8,
+            max_tokens=500
         )
-
-        response = chat_completion.choices[0].message.content.strip()
-        return parse_groq_text(response)
-
+        
+        response = chat_completion.choices[0].message.content
+        parsed = extract_json_from_text(response)
+        if parsed:
+            parsed["hashtags"] = clean_hashtags(parsed.get("hashtags", ""))
+            return parsed
+        else:
+            raise ValueError("No valid JSON found")
+            
     except Exception as e:
-        st.warning(f"AI text generation failed: {e}. Using defaults.")
+        st.warning(f"AI generation fallback due to: {e}")
         return {
-            "title": "Luxury Furniture",
-            "hook": "LIMITED STOCK!",
-            "cta": "DM TO ORDER • 0710 895 737"
+            "title": "PRO TIP",
+            "tip": "Mix vinegar and olive oil for natural wood polish that brings out the grain beautifully.",
+            "caption": "Transform your furniture with this natural polish! 🌟 Perfect for maintaining that luxurious SM Interiors look.",
+            "hashtags": "#DIY #HomeDecor #InteriorDesign #Furniture #WoodCare #HomeImprovement #DesignTips #BudgetFriendly #HomeHacks #InteriorInspo #SMInteriors"
         }
 
-def parse_groq_text(text):
-    """Parse Groq's text output"""
-    lines = text.split("\n")
-    data = {}
-    for line in lines:
-        if ": " in line:
-            key, value = line.split(": ", 1)
-            data[key.strip()] = value.strip()
-    return data
+def create_template_background(template_name):
+    bg = Image.new("RGB", (WIDTH, HEIGHT), "#0F0A05")
+    draw = ImageDraw.Draw(bg)
+    
+    if template_name == "Modern Minimal":
+        for i in range(0, WIDTH, 150):
+            draw.line([(i, 0), (i, HEIGHT)], fill="#1A1208", width=2)
+        draw.rectangle([100, 300, 150, 350], fill="#FFD700")
+        draw.rectangle([WIDTH-150, 800, WIDTH-100, 850], fill="#FFD700")
+        
+    elif template_name == "Luxury Gold":
+        for i in range(5):
+            radius = 300 + i * 100
+            draw.ellipse([WIDTH//2-radius, HEIGHT//2-radius, WIDTH//2+radius, HEIGHT//2+radius], 
+                        outline="#FFD700", width=2)
+        for y in range(0, HEIGHT, 50):
+            alpha_val = int(50 + 50 * math.sin(y/100))
+            color = (255, 215, 0)
+            draw.line([(0, y), (WIDTH, y)], fill=color, width=1)
+            
+    elif template_name == "Geometric Art":
+        draw.rectangle([200, 400, 400, 600], outline="#FFD700", width=3)
+        draw.ellipse([650, 525, 950, 825], outline="#FFD700", width=3)
+        draw.polygon([(100, 1200), (300, 1200), (200, 1400)], outline="#FFD700", width=3)
+    
+    return bg
 
-# ✅ FIXED: Mobile-tested layout system with integer coordinates
-def create_frame(t, product_img, hook, price, cta, title, logo=None):
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), "#0F0A05")  # Brand brown
+def create_text_frame(t, tip_lines, tip_title, current_step, total_steps, template_name, logo=None):
+    bg = create_template_background(template_name)
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(canvas)
-
-    # ✅ SUBTLE ANIMATED GEOMETRIC SHAPES
-    # Gold rings (static)
-    for cx, cy, r in [(540, 960, 600), (660, 840, 800), (360, 1140, 1000)]:
-        draw.ellipse([int(cx-r), int(cy-r), int(cx+r), int(cy+r)], outline="#FFD700", width=4)
-
-    # Animated geometric shapes (all coordinates converted to integers)
-    for i in range(2):
-        # Circle animation
-        radius = int(150 + 30 * np.sin(t * 0.5 + i * 2))
-        x = int(540 + 100 * np.cos(t * 0.3 + i))
-        y = int(960 + 80 * np.sin(t * 0.3 + i))
-        draw.ellipse([x-radius, y-radius, x+radius, y+radius], 
-                    outline="#FFD700", width=2, fill=None)
-
-        # Rectangle animation
-        w = int(200 + 40 * np.sin(t * 0.4 + i))
-        h = int(150 + 30 * np.cos(t * 0.4 + i))
-        x1 = int(660 - w//2 + 50 * np.cos(t * 0.6 + i))
-        y1 = int(840 - h//2 + 40 * np.sin(t * 0.6 + i))
-        draw.rectangle([x1, y1, x1+w, y1+h], 
-                      outline="#FFD700", width=2, fill=None)
-
-    # ✅ PRODUCT (centered professionally)
-    base_scale = st.session_state.get("product_scale", 1.0)
-    scale = base_scale * (0.8 + 0.2 * (np.sin(t * 2) ** 2))
-    size = int(850 * scale)
-    resized = product_img.resize((size, size), Image.LANCZOS)
-    angle = np.sin(t * 0.5) * 3
-    rotated = resized.rotate(angle, expand=True, resample=Image.BICUBIC)
     
-    # Product in safe zone (350-700px from top)
-    prod_y = st.session_state.get("prod_y_offset", 0)
-    prod_y = int(max(350, min(700, 500 + prod_y + np.sin(t * 3) * 30)))
-    prod_x = int((WIDTH - rotated.width) // 2)
-    
-    canvas.paste(rotated, (prod_x, prod_y), rotated if rotated.mode == 'RGBA' else None)
+    title_font = get_font(80, bold=True)
+    tip_font = get_font(64, bold=True)
+    step_font = get_font(48)
+    cta_font = get_font(50, bold=True)
 
-    # ✅ FIXED TEXT POSITIONS (MOBILE-TESTED SAFE ZONES)
-    # Title (top zone)
+    if template_name == "Modern Minimal":
+        title_color = "#FFFFFF"
+        text_color = "#FFD700"
+        bg_alpha = 180
+    elif template_name == "Luxury Gold":
+        title_color = "#FFD700"
+        text_color = "#FFFFFF"
+        bg_alpha = 220
+    else:
+        title_color = "#FFD700"
+        text_color = "#FFFFFF"
+        bg_alpha = 200
+
+    title_y = 100 + int(30 * math.sin(t * 2))
+    draw.text((60, title_y), tip_title, font=title_font, fill=title_color)
+
+    step_text = f"Step {current_step} of {total_steps}"
     try:
-        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 90)
+        step_width = draw.textlength(step_text, font=step_font)
     except:
-        title_font = ImageFont.load_default()
-    draw.text((60, 80), title, font=title_font, fill="#FFFFFF", 
-              stroke_width=5, stroke_fill="#000")
+        step_width = 300
+    draw.text((WIDTH - step_width - 60, title_y), step_text, font=step_font, fill="#FFFFFF")
 
-    # Hook (below title)
+    progress_width = 800
+    progress_height = 12
+    progress_x = (WIDTH - progress_width) // 2
+    progress_y = title_y + 120
+    draw.rounded_rectangle([progress_x, progress_y, progress_x + progress_width, progress_y + progress_height], 
+                          radius=6, fill="#333333")
+    progress_fill = (current_step - 1) / total_steps
+    fill_width = int(progress_width * progress_fill)
+    if fill_width > 0:
+        draw.rounded_rectangle([progress_x, progress_y, progress_x + fill_width, progress_y + progress_height], 
+                              radius=6, fill="#FFD700")
+
+    base_y = 600
+    line_height = 100
+    for i, line in enumerate(tip_lines):
+        line_delay = i * 0.3
+        line_time = max(0, t - line_delay)
+        alpha = int(255 * min(1.0, line_time))
+
+        if alpha <= 0:
+            continue
+
+        offset_x, offset_y = 0, 0
+        if template_name == "Modern Minimal":
+            offset_y = int((1 - min(1.0, line_time)) * 50)
+        elif template_name == "Geometric Art":
+            offset_x = int((1 - min(1.0, line_time)) * 100 * math.sin(line_time * 5))
+
+        y_pos = base_y + (i * line_height) + offset_y
+
+        bbox = draw.textbbox((0, 0), line, font=tip_font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        bg_padding = 25
+        bg_rect = [
+            WIDTH//2 - text_width//2 - bg_padding,
+            y_pos - text_height//2 - bg_padding//2,
+            WIDTH//2 + text_width//2 + bg_padding,
+            y_pos + text_height//2 + bg_padding//2
+        ]
+
+        if template_name == "Modern Minimal":
+            draw.rectangle(bg_rect, fill=(15, 10, 5, bg_alpha))
+        else:
+            draw.rounded_rectangle(bg_rect, radius=20, fill=(15, 10, 5, bg_alpha))
+
+        final_x = WIDTH//2 - text_width//2 + offset_x
+        draw.text((final_x, y_pos - text_height//2), line, font=tip_font, fill=text_color)
+
+    cta_alpha = int(128 + 127 * math.sin(t * 4))
+    cta_text = "👉 SWIPE UP FOR MORE DIY TIPS"
     try:
-        hook_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 110)
+        cta_width = draw.textlength(cta_text, font=cta_font)
     except:
-        hook_font = ImageFont.load_default()
-    draw.text((60, 180), hook, font=hook_font, fill="#FFD700", 
-              stroke_width=7, stroke_fill="#000")
+        cta_width = 800
+    cta_x = (WIDTH - cta_width) // 2
+    cta_y = HEIGHT - 150
+    draw.text((cta_x, cta_y), cta_text, font=cta_font, fill=(255, 255, 255, cta_alpha))
 
-    # Price badge (thumb zone)
-    try:
-        price_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 130)
-    except:
-        price_font = ImageFont.load_default()
-    draw.rounded_rectangle([140, 1550, 940, 1720], radius=80, fill="#FFD700")
-    draw.text((540, 1600), price, font=price_font, fill="#0F0A05", anchor="mm")
-
-    # CTA (thumb tap zone)
-    try:
-        cta_font = ImageFont.truetype("DejaVuSans.ttf", 85)
-    except:
-        cta_font = ImageFont.load_default()
-    draw.text((60, 1800), cta, font=cta_font, fill="#FFFFFF", 
-              stroke_width=5, stroke_fill="#000")
-
-    # ✅ LOGO (5% rule - top-left safe zone)
     if logo:
-        canvas.paste(logo, (40, 40), logo)
+        canvas.paste(logo, (WIDTH - 300, 40), logo)
 
-    return np.array(canvas)
+    bg.paste(canvas, (0, 0), canvas)
+    return np.array(bg)
 
-# --- UI ---
-st.title("🎬 SM Interiors Reel Tool — Fixed & Optimized")
-st.caption("6s reels • No errors • One-click workflow • Nov 24, 2025")
+def split_text_into_lines(text, max_chars_per_line=25):
+    words = text.split()
+    lines = []
+    current_line = []
+    for word in words:
+        test_line = ' '.join(current_line + [word])
+        if len(test_line) <= max_chars_per_line:
+            current_line.append(word)
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+            current_line = [word]
+    if current_line:
+        lines.append(' '.join(current_line))
+    return lines
 
-# One-click workflow section
-st.markdown("""
-### ✅ How to Use This Tool (3 Simple Steps)
-1. **Upload** your product photo
-2. **Click** "Generate All Text with AI"
-3. **Click** "Generate 6-Second Reel"
-""")
+def generate_multiple_tips(client, category, count=3):
+    tips = []
+    for i in range(count):
+        with st.spinner(f"Generating tip {i+1} of {count}..."):
+            tip_content = generate_diy_content(client, category)
+            tips.append({
+                "title": tip_content["title"],
+                "tip": tip_content["tip"],
+                "caption": tip_content["caption"],
+                "hashtags": tip_content["hashtags"],
+                "duration": calculate_duration(tip_content["tip"])
+            })
+    return tips
 
-col1, col2 = st.columns(2)
+# Ensure audio dir exists
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+# UI
+st.title("💡 SM Interiors AI DIY Tips Animator")
+st.caption("AI-powered DIY tutorial videos • Smart duration calculator • Batch processing")
+
+groq_client = init_groq_client()
+
+mode = st.radio("Choose Mode", ["Single Tip", "Multiple Tips"], horizontal=True)
+
+col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("📸 Product Image")
-    uploaded = st.file_uploader("Upload Product Photo", type=["png", "jpg", "jpeg", "webp"], 
-                              help="JPG/PNG under 5MB • Works with outdoor shots",
-                              label_visibility="collapsed")
+    st.subheader("🤖 AI Content Generator")
+    selected_category = st.selectbox(
+        "DIY Category",
+        list(DIY_CATEGORIES.keys()),
+        format_func=lambda x: DIY_CATEGORIES[x]
+    )
     
-    if uploaded:
-        with st.spinner("Processing image..."):
-            product_img, img_bytes = safe_image_load(uploaded)
-            if product_img:
-                st.image(product_img, caption="✅ Background removed & professionally composed", use_column_width=True)
+    if mode == "Single Tip":
+        disabled = groq_client is None
+        if st.button("🎲 Generate Random DIY Tip", use_container_width=True, disabled=disabled):
+            with st.spinner("AI is creating your DIY tip..."):
+                ai_content = generate_diy_content(groq_client, selected_category)
+                st.session_state.ai_title = ai_content["title"]
+                st.session_state.ai_tip = ai_content["tip"]
+                st.session_state.ai_caption = ai_content["caption"]
+                st.session_state.ai_hashtags = ai_content["hashtags"]
+                st.session_state.ai_duration = calculate_duration(ai_content["tip"])
+        
+        if hasattr(st.session_state, 'ai_title'):
+            tip_title = st.text_input("Tip Title", st.session_state.ai_title, max_chars=25)
+            tip_text = st.text_area("DIY Tip Description", st.session_state.ai_tip, height=100)
+            duration = calculate_duration(tip_text)
+            st.info(f"🎬 Auto-calculated Duration: **{duration} seconds** ({len(tip_text.split())} words)")
+            st.subheader("📱 Social Media Content")
+            st.text_area("AI Generated Caption", st.session_state.ai_caption, height=80)
+            st.text_area("AI Generated Hashtags", st.session_state.ai_hashtags, height=80)
+        else:
+            tip_title = st.text_input("Tip Title", "PRO TIP", max_chars=25)
+            tip_text = st.text_area("DIY Tip Description", 
+                                   "Mix vinegar and olive oil for natural wood polish that brings out the grain beautifully.",
+                                   height=100)
+            if tip_text:
+                duration = calculate_duration(tip_text)
+                st.info(f"🎬 Auto-calculated Duration: **{duration} seconds** ({len(tip_text.split())} words)")
+    
     else:
-        product_img = None
-        img_bytes = None
-
-    st.subheader("💰 Price")
-    price = st.text_input("Price", "Ksh 18,999", label_visibility="collapsed")
+        st.subheader("🔄 Batch Tip Generation")
+        num_tips = st.slider("Number of Tips to Generate", 2, 10, 3)
+        disabled = groq_client is None
+        if st.button("🚀 Generate Multiple Tips", use_container_width=True, disabled=disabled):
+            with st.spinner(f"AI is generating {num_tips} tips..."):
+                multiple_tips = generate_multiple_tips(groq_client, selected_category, num_tips)
+                st.session_state.multiple_tips = multiple_tips
+        
+        if hasattr(st.session_state, 'multiple_tips'):
+            st.success(f"✅ Generated {len(st.session_state.multiple_tips)} tips!")
+            for i, tip in enumerate(st.session_state.multiple_tips):
+                with st.expander(f"Tip {i+1}: {tip['title']} ({tip['duration']}s)"):
+                    st.text_input(f"Title {i+1}", tip['title'], key=f"title_{i}")
+                    st.text_area(f"Description {i+1}", tip['tip'], height=80, key=f"tip_{i}")
+                    st.text_area(f"Caption {i+1}", tip['caption'], height=60, key=f"caption_{i}")
+                    st.text_area(f"Hashtags {i+1}", tip['hashtags'], height=60, key=f"hashtags_{i}")
 
 with col2:
-    st.subheader("🤖 AI-Powered Text")
-    if client and uploaded and img_bytes:
-        if st.button("✨ Generate All Text with AI", type="primary", use_container_width=True):
-            with st.spinner("AI generating text..."):
-                ai_data = generate_text_with_groq(img_bytes)
-                st.session_state.title = ai_data.get("title", "Luxury Furniture")[:25]
-                st.session_state.hook = ai_data.get("hook", "LIMITED STOCK!")[:18]
-                st.session_state.cta = ai_data.get("cta", "DM TO ORDER • 0710 895 737")[:30]
-                st.success("✅ AI generated all text content!")
+    st.subheader("🎨 Designer Template")
+    template = st.selectbox("Choose Template", 
+                           ["Modern Minimal", "Luxury Gold", "Geometric Art"])
+    template_descriptions = {
+        'Modern Minimal': 'Clean lines, minimalist design',
+        'Luxury Gold': 'Elegant gold accents, premium feel', 
+        'Geometric Art': 'Dynamic shapes, artistic layout'
+    }
+    st.info(f"**{template}** - {template_descriptions[template]}")
+    
+    if mode == "Single Tip":
+        total_steps = st.slider("Total Steps in Series", 1, 10, 3)
+        current_step = st.slider("Current Step Number", 1, total_steps, 1)
     else:
-        st.info("ℹ️ AI features disabled (no API key). Use manual text below.")
+        total_steps = st.slider("Total Steps in Series (applies to all)", 1, 10, 3)
+        current_step = 1
 
-    st.subheader("✏️ Text Content")
-    title = st.text_input("Title (max 25 chars)", 
-                         value=st.session_state.get("title", "Grey Chest of Drawers")[:25], 
-                         max_chars=25)
+# Preview
+if mode == "Single Tip":
+    tip_title = st.session_state.get('ai_title', "PRO TIP") if hasattr(st.session_state, 'ai_title') else "PRO TIP"
+    tip_text = st.session_state.get('ai_tip', "") if hasattr(st.session_state, 'ai_tip') else "Mix vinegar and olive oil..."
+    tip_lines = split_text_into_lines(tip_text)
+    duration = calculate_duration(tip_text)
     
-    hook = st.text_input("Hook (max 18 chars)", 
-                        value=st.session_state.get("hook", "2 LEFT IN STOCK!")[:18], 
-                        max_chars=18)
-    
-    cta = st.text_input("CTA (max 30 chars)", 
-                       value=st.session_state.get("cta", "DM TO ORDER • 0710 895 737")[:30], 
-                       max_chars=30)
-
-# --- PREVIEW ---
-if uploaded and product_img is not None:
     st.markdown("---")
-    st.subheader("✅ PREVIEW (Exact Output)")
-    
+    st.subheader("📱 LIVE PREVIEW")
     logo_img = load_logo()
-    
-    # Create preview frame
-    preview_frame = create_frame(0, product_img, hook, price, cta, title, logo_img)
-    preview_img = Image.fromarray(preview_frame)
-    
-    st.image(preview_img, use_column_width=True)
-    st.caption("📱 This is exactly what will render. Tested on iPhone SE • Samsung A14 • iPhone 14 Pro")
+    preview_time = st.slider("Preview Animation Time", 0.0, 3.0, 1.0, 0.1)
 
-# --- RENDER ---
-if st.button("🚀 GENERATE 6-SECOND REEL", type="primary", use_container_width=True):
-    if not uploaded or product_img is None:
-        st.error("❌ Upload a product photo first!")
-    else:
-        with st.spinner(".Rendering 6-second video... (takes 20-35 seconds)"):
-            logo_img = load_logo()
+    preview_frame = create_text_frame(
+        t=preview_time,
+        tip_lines=tip_lines,
+        tip_title=tip_title,
+        current_step=current_step,
+        total_steps=total_steps,
+        template_name=template,
+        logo=logo_img
+    )
+    st.image(Image.fromarray(preview_frame), use_column_width=True)
+    st.caption(f"Preview of {template} template - {duration} seconds")
+
+# GENERATE VIDEO
+if mode == "Single Tip":
+    tip_text = st.session_state.get('ai_tip', "") if hasattr(st.session_state, 'ai_tip') else ""
+    tip_title = st.session_state.get('ai_title', "PRO TIP") if hasattr(st.session_state, 'ai_title') else "PRO TIP"
+    if st.button("🚀 GENERATE DIY TIP VIDEO", type="primary", use_container_width=True):
+        if not tip_text.strip():
+            st.error("Please enter a DIY tip!")
+        else:
+            with st.spinner("Creating your professional DIY tip video..."):
+                frames = []
+                logo_img = load_logo()
+                tip_lines = split_text_into_lines(tip_text)
+                duration = calculate_duration(tip_text)
+                
+                for i in range(FPS * duration):
+                    t = i / FPS
+                    frame = create_text_frame(t, tip_lines, tip_title, current_step, total_steps, template, logo_img)
+                    frames.append(frame)
+                
+                clip = ImageSequenceClip(frames, fps=FPS)
+                audio_path = os.path.join(AUDIO_DIR, MUSIC_FILES[music_key])
+                final_clip = clip
+                audio_used = False
+                if os.path.exists(audio_path):
+                    try:
+                        audio = AudioFileClip(audio_path).subclip(0, min(duration, AudioFileClip(audio_path).duration))
+                        final_clip = clip.set_audio(audio)
+                        audio_used = True
+                    except Exception as e:
+                        st.warning(f"Audio skipped: {e}")
+                
+                video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                try:
+                    final_clip.write_videofile(
+                        video_path,
+                        fps=FPS,
+                        codec="libx264",
+                        audio_codec="aac" if audio_used else None,
+                        threads=4,
+                        preset="fast",
+                        logger=None
+                    )
+                    st.success("✅ PROFESSIONAL DIY TIP VIDEO READY!")
+                    st.video(video_path)
+                    
+                    with open(video_path, "rb") as f:
+                        st.download_button(
+                            "⬇️ DOWNLOAD DIY TIP VIDEO", 
+                            f, 
+                            f"SM_DIY_{template.replace(' ', '_')}.mp4", 
+                            "video/mp4", 
+                            use_container_width=True
+                        )
+                    
+                    if hasattr(st.session_state, 'ai_caption'):
+                        st.subheader("📱 Social Media Ready Content")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.text_area("💬 Copy this caption:", st.session_state.ai_caption, height=100)
+                        with col2:
+                            st.text_area("🏷️ Copy these hashtags:", st.session_state.ai_hashtags, height=100)
+                except Exception as e:
+                    st.error(f"❌ Video encoding failed: {e}")
+                finally:
+                    if os.path.exists(video_path):
+                        os.unlink(video_path)
+                    clip.close()
+                    if 'audio' in locals():
+                        audio.close()
+                    del frames
+                    gc.collect()
+
+else:
+    if hasattr(st.session_state, 'multiple_tips') and st.button("🎬 GENERATE ALL VIDEOS", type="primary", use_container_width=True):
+        logo_img = load_logo()
+        music_key = st.session_state.get('music_key', "Gold Luxury")  # Capture current selection
+        for i, tip in enumerate(st.session_state.multiple_tips):
+            st.write(f"**Generating video {i+1} of {len(st.session_state.multiple_tips)}: {tip['title']}**")
+            tip_lines = split_text_into_lines(tip['tip'])
+            duration = tip['duration']
             frames = []
-            
-            # Generate frames with progress bar
-            progress = st.progress(0)
-            for i in range(FPS * DURATION):
-                frame = create_frame(i / FPS, product_img, hook, price, cta, title, logo_img)
+            for frame_num in range(FPS * min(duration, 15)):  # Safety cap
+                t = frame_num / FPS
+                frame = create_text_frame(t, tip_lines, tip['title'], 1, total_steps, template, logo_img)
                 frames.append(frame)
-                progress.progress((i + 1) / (FPS * DURATION))
             
             clip = ImageSequenceClip(frames, fps=FPS)
+            audio_path = os.path.join(AUDIO_DIR, MUSIC_FILES[music_key])
+            final_clip = clip
+            audio_used = False
+            if os.path.exists(audio_path):
+                try:
+                    audio = AudioFileClip(audio_path).subclip(0, min(duration, AudioFileClip(audio_path).duration))
+                    final_clip = clip.set_audio(audio)
+                    audio_used = True
+                except Exception as e:
+                    st.warning(f"Audio skipped for tip {i+1}: {e}")
             
-            # Audio handling
-            audio = None
-            audio_path = None
-            try:
-                resp = requests.get(MUSIC_URL, timeout=10)
-                if resp.status_code == 200:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-                        tmp.write(resp.content)
-                        audio_path = tmp.name
-                    
-                    audio_clip = AudioFileClip(audio_path)
-                    audio_duration = min(DURATION, audio_clip.duration)
-                    audio = audio_clip.subclip(0, audio_duration)
-                    clip = clip.set_audio(audio)
-                else:
-                    st.warning(f"Audio download failed (status {resp.status_code}). Video only.")
-            except Exception as e:
-                st.warning(f"Audio skipped: {str(e)[:50]}... Video only.")
-
-            # Export
             video_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            clip.write_videofile(
-                video_path,
-                fps=FPS,
-                codec="libx264",
-                audio_codec="aac" if audio else None,
-                threads=4,
-                preset="medium",
-                bitrate="1000k",
-                logger=None
-            )
-            
-            st.success("✅ REEL GENERATED SUCCESSFULLY!")
-            st.video(video_path)
-            
-            with open(video_path, "rb") as f:
-                st.download_button("⬇️ DOWNLOAD REEL (MP4)", f, "SM_Interiors_Reel.mp4", "video/mp4", 
-                                 use_container_width=True,
-                                 type="primary")
-            
-            # Cleanup
-            if audio_path and os.path.exists(audio_path):
-                os.unlink(audio_path)
-            if os.path.exists(video_path):
-                os.unlink(video_path)
-            clip.close()
+            try:
+                final_clip.write_videofile(
+                    video_path,
+                    fps=FPS,
+                    codec="libx264",
+                    audio_codec="aac" if audio_used else None,
+                    threads=4,
+                    preset="fast",
+                    logger=None
+                )
+                with open(video_path, "rb") as f:
+                    st.download_button(
+                        f"⬇️ Download Tip {i+1}: {tip['title']}",
+                        f,
+                        f"SM_DIY_Tip_{i+1}_{template.replace(' ', '_')}.mp4",
+                        "video/mp4"
+                    )
+                with st.expander(f"Social Content for Tip {i+1}"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.text_area("Caption", tip['caption'], height=100, key=f"batch_caption_{i}")
+                    with col2:
+                        st.text_area("Hashtags", tip['hashtags'], height=100, key=f"batch_hashtags_{i}")
+            except Exception as e:
+                st.error(f"Failed to generate video {i+1}: {e}")
+            finally:
+                if os.path.exists(video_path):
+                    os.unlink(video_path)
+                clip.close()
+                if 'audio' in locals():
+                    audio.close()
+                del frames
+                gc.collect()
 
 st.markdown("---")
-st.caption("✅ TESTED ON STREAMLIT CLOUD • NO TEXT OVERLAP • NOV 24, 2025")
+st.subheader("✨ Smart Features")
+features = st.columns(3)
+with features[0]:
+    st.markdown("**⏱️ Auto Duration**")
+    st.caption("Video length automatically calculated based on word count")
+with features[1]:
+    st.markdown("**📂 Organized Categories**")
+    st.caption("8 DIY categories for targeted content creation")
+with features[2]:
+    st.markdown("**🔄 Batch Processing**")
+    st.caption("Generate multiple videos in one click")
+
+st.caption("✅ SMART DURATION • CATEGORY ORGANIZED • BATCH PROCESSING • AI-POWERED")
