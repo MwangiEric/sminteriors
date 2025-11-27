@@ -1,9 +1,90 @@
-# journal_app.py  ––  final version  ––
-import io, textwrap, math, requests, streamlit as st
+# streamlit_app.py
+import io, os, textwrap, math, requests, streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageFilter
-from rembg import remove   # pip install rembg (only if you want auto-bg removal)
+from rembg import remove
+from groq import Groq
 
-# ---------- EXTERNAL ASSETS ----------
+# ---------------------------------------------------------
+#  GROQ VISION HELPERS
+# ---------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _groq_client():
+    return Groq(api_key=os.getenv("groq_key"))
+
+def describe_image(img: Image.Image, prompt: str) -> str:
+    """Return Groq vision description for any PIL image."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    client = _groq_client()
+    completion = client.chat.completions.create(
+        model="llama-3.2-90b-vision-preview",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{buf.getvalue().encode('utf-8').hex()}"}}
+            ]
+        }],
+        temperature=0.7,
+        max_tokens=300
+    )
+    return completion.choices[0].message.content
+
+# ---------------------------------------------------------
+#  COSMETIC BACKGROUND  (glowing brand circles)
+# ---------------------------------------------------------
+_BRAND = {"aqua": "#00F5FF", "lime": "#ADFF2F", "magenta": "#FF00FF", "dark": "#111827"}
+st.set_page_config(page_title="Journal Composer", layout="wide")
+st.markdown(f"""
+<style>
+.stApp {{
+    background: {_BRAND["dark"]};
+    overflow-x: hidden;
+}}
+.geo-bg {{
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    z-index: -1;
+    pointer-events: none;
+}}
+.geo-bg circle {{
+    animation: pulse 6s ease-in-out infinite;
+}}
+@keyframes pulse {{
+    0%   {{ opacity: 0.25; transform: scale(1); }}
+    50%  {{ opacity: 0.65; transform: scale(1.15); }}
+    100% {{ opacity: 0.25; transform: scale(1); }}
+}}
+</style>
+<svg class="geo-bg" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="g1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="{_BRAND["aqua"]}" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="{_BRAND["aqua"]}" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="g2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="{_BRAND["lime"]}" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="{_BRAND["lime"]}" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="g3" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="{_BRAND["magenta"]}" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="{_BRAND["magenta"]}" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="15%" cy="20%" r="22%" fill="url(#g1)"/>
+  <circle cx="80%" cy="70%" r="18%" fill="url(#g2)"/>
+  <circle cx="50%" cy="90%" r="25%" fill="url(#g3)"/>
+  <circle cx="70%" cy="15%" r="12%" fill="none" stroke="{_BRAND["aqua"]}" stroke-width="2" opacity="0.4"/>
+  <circle cx="25%" cy="80%" r="15%" fill="none" stroke="{_BRAND["lime"]}" stroke-width="3" opacity="0.5"/>
+  <circle cx="90%" cy="45%" r="10%" fill="none" stroke="{_BRAND["magenta"]}" stroke-width="2" opacity="0.6"/>
+</svg>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+#  IMAGE UTILS
+# ---------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def load_url_image(url):
     return Image.open(requests.get(url, stream=True, timeout=10).raw).convert("RGBA")
@@ -13,7 +94,6 @@ PRODUCT_URL = "https://ik.imagekit.io/ericmwangi/product.png"
 DEFAULT_LOGO  = load_url_image(LOGO_URL)
 DEFAULT_PHOTO = load_url_image(PRODUCT_URL)
 
-# ---------- PAGE SIZES (paper + social) ----------
 PAGE = {
     "A4 portrait":  (210, 297),
     "A4 landscape": (297, 210),
@@ -23,14 +103,16 @@ PAGE = {
     "4×6 in":       (102, 152),
     "Square 1:1":   (200, 200),
     "Instagram 1:1":(200, 200),
-    "FaceBook 1.91:1":(200, 105),  # 1.91 ≈ 200/105
+    "FaceBook 1.91:1":(200, 105),
     "Story 9:16":   (108, 192),
 }
 DPI = 300
 MM_TO_PX = DPI / 25.4
 def mm_to_px(mm): return int(mm * MM_TO_PX)
 
-# ---------- TEXT UTILS ----------
+# ---------------------------------------------------------
+#  TEXT UTILS
+# ---------------------------------------------------------
 def format_text(text, mode):
     if mode == "Title Case":    return text.title()
     if mode == "Sentence case": return text.capitalize()
@@ -40,7 +122,6 @@ def format_text(text, mode):
 
 # ---------- DROP-SHADOW ----------
 def add_drop_shadow(img, offset_mm=2, blur=3, opacity=40):
-    """Return img with minimal shadow behind transparent areas."""
     shadow = Image.new("RGBA", (img.width + mm_to_px(offset_mm)*2, img.height + mm_to_px(offset_mm)*2), (0,0,0,0))
     shadow_draw = ImageDraw.Draw(shadow)
     shadow_draw.rectangle([mm_to_px(offset_mm), mm_to_px(offset_mm),
@@ -93,7 +174,7 @@ PRESETS = {
 if "layout" not in st.session_state:
     st.session_state.layout = dict(
         page="A4 portrait", sig_scale=25, sig_x=20, sig_y=20,
-        note_x=50, note_y=200, note_size=35, note_wrap=35,
+        note_x=50, note_y=200, note_size=50, note_wrap=35,
         note_col="#4F4F4F", enhance=False, preset="Morning light",
         export_dpi=300, text_format="Sentence case", warp=False,
         logo_scale=30, logo_x=15, logo_y=15
@@ -107,16 +188,18 @@ if "preview_generated" not in st.session_state:
 
 L = st.session_state.layout
 
-# ---------- SIDEBAR ----------
+# ---------------------------------------------------------
+#  SIDEBAR
+# ---------------------------------------------------------
 with st.sidebar:
     st.title("📔 Journal Composer")
     mode = st.radio("Mode", ["Edit", "Preview"], index=0)
+
     if mode == "Edit":
         st.header("1. Images")
         bg_file = st.file_uploader("Upload background (jpg/png) – optional", type=["jpg", "jpeg", "png"])
         sig_file = st.file_uploader("Upload signature (optional)", type=["png"])
         fg_file  = st.file_uploader("Upload foreground PNG (transparent) – optional", type=["png"])
-        # load ONCE and cache
         if bg_file is not None:
             st.session_state.user_bg = Image.open(bg_file).convert("RGBA")
             st.session_state.bg      = st.session_state.user_bg
@@ -133,10 +216,8 @@ with st.sidebar:
         else:
             st.session_state.fg = None
 
-        # ---------- 1a. FOREGROUND PRE-DEFINED AREA + DROP-SHADOW ----------
         if fg_file is not None:
             st.subheader("Foreground area (pre-defined rectangle)")
-            # base rectangle size (change here if you want)
             base_w_mm, base_h_mm = 100, 140
             w_area_mm = base_w_mm * (st.session_state.get("area_scale", 100) / 100)
             h_area_mm = base_h_mm * (st.session_state.get("area_scale", 100) / 100)
@@ -144,7 +225,6 @@ with st.sidebar:
             area_scale  = st.slider("Area scale %", 50, 200, 100, key="area_scale")
             area_nudge_x = st.slider("Area nudge X (mm)", -20, 20, 0, key="area_nudge_x")
             area_nudge_y = st.slider("Area nudge Y (mm)", -20, 20, 0, key="area_nudge_y")
-            # quick anchors
             c1, c2, c3 = st.columns(3)
             with c1:
                 if st.button("Centre area", key="centre_area"):
@@ -180,45 +260,70 @@ with st.sidebar:
         st.header("3. Text blocks")
         left_mm = st.slider("Text left indent (mm)", 0, 50, 20)
 
-        # HEADER
         st.subheader("Header")
         header_text = st.text_input("Header", "My Product", key="header_in")
-        header_size = st.slider("Header size (pt)", 12, 200, 94, key="header_size")   # default 94
+        header_size = st.slider("Header size (pt)", 12, 200, 125, key="header_size")   # ↑ bigger
         header_col  = st.color_picker("Header colour", "#000000", key="header_col")
         header_y_mm = st.slider("Header Y (mm)", 0, PAGE[L["page"]][1], 30, key="header_y")
 
-        # TAG-LINE
         st.subheader("Tag-line")
         tag_text = st.text_input("Tag-line", "The best thing since sliced bread.", key="tag_in")
-        tag_size = st.slider("Tag-line size (pt)", 8, 150, 48, key="tag_size")       # default 48
+        tag_size = st.slider("Tag-line size (pt)", 8, 150, 65, key="tag_size")       # ↑ bigger
         tag_col  = st.color_picker("Tag-line colour", "#555555", key="tag_col")
         tag_y_mm = st.slider("Tag-line Y (mm)", 0, PAGE[L["page"]][1], 50, key="tag_y")
 
-        # PRODUCT INFO
-        st.subheader("Product info")
+        st.subheader("Product info (side-note)")
         info_text = st.text_area("Info", "Describe your product here.\nYou can write several sentences.", key="info_in")
-        info_size = st.slider("Info size (pt)", 8, 180, 62, key="info_size")        # default 62
+        info_size = st.slider("Info size (pt)", 8, 180, 85, key="info_size")        # ↑ bigger
         info_col  = st.color_picker("Info colour", "#333333", key="info_col")
         info_y_mm = st.slider("Info Y (mm)", 0, PAGE[L["page"]][1], 70, key="info_y")
         info_wrap = st.slider("Info wrap width", 20, 80, 45, key="info_wrap")
 
-        # CONTACT
         st.subheader("Contact")
         contact_text = st.text_area("Contact", "Email: hello@example.com\nPhone: +1 234 567 890", key="contact_in")
-        contact_size = st.slider("Contact size (pt)", 8, 150, 50, key="contact_size")  # default 50
+        contact_size = st.slider("Contact size (pt)", 8, 150, 70, key="contact_size")  # ↑ bigger
         contact_col  = st.color_picker("Contact colour", "#444444", key="contact_col")
         contact_y_mm = st.slider("Contact Y (mm)", 0, PAGE[L["page"]][1], PAGE[L["page"]][1] - 30, key="contact_y")
         contact_wrap = st.slider("Contact wrap width", 20, 100, 60, key="contact_wrap")
 
-        # global text tools
         text_format = st.selectbox("Text format", ["Sentence case", "Title Case", "UPPER CASE", "lower case"], index=["Sentence case", "Title Case", "UPPER CASE", "lower case"].index(L["text_format"]))
         L["text_format"] = text_format
         L["warp"]        = st.checkbox("Warp text (sine wave)", L["warp"])
-
         L["enhance"] = st.checkbox("Auto-enhance photo", L["enhance"])
         L["export_dpi"] = st.radio("Export DPI", [72, 150, 300], index=2)
 
-# ---------- PREVIEW ----------
+        # ---------- AI COPY FROM IMAGE ----------
+        st.header("4. ✨ AI copy from image")
+        if st.button("Generate headline / tag / note from image"):
+            w_px, h_px = mm_to_px(PAGE[L["page"]][0]), mm_to_px(PAGE[L["page"]][1])
+            composite = Image.new("RGBA", (w_px, h_px), (255, 255, 255, 255))
+            bg = st.session_state.get("bg", DEFAULT_PHOTO)
+            bg = ImageOps.fit(bg, (w_px, h_px), centering=(0.5, 0.5))
+            if L["enhance"]:
+                bg = auto_enhance(bg.convert("RGB")).convert("RGBA")
+            grad = mood_gradient(bg.size, PRESETS[L["preset"]]["top_col"], PRESETS[L["preset"]]["bottom_col"])
+            composite = Image.alpha_composite(bg, grad)
+            prompt = (
+                "You are a creative copy-writer. "
+                "Look at this image and return ONLY three short lines separated by '|': "
+                "1) a catchy HEADLINE (4-6 words), "
+                "2) a playful TAG-LINE (8-12 words), "
+                "3) a tiny SIDE-NOTE (3-5 words). "
+                "Do not add labels or numbers, just the three strings separated by '|'."
+            )
+            answer = describe_image(composite, prompt)
+            try:
+                headline, tag, note = [a.strip() for a in answer.split("|", 2)]
+            except ValueError:
+                headline, tag, note = "Fresh new drop", "Check out what we just released", "Limited edition"
+            st.session_state["header_in"] = headline
+            st.session_state["tag_in"]    = tag
+            st.session_state["info_in"]   = note
+            st.rerun()
+
+# ---------------------------------------------------------
+#  PREVIEW
+# ---------------------------------------------------------
 bg = st.session_state.get("bg", DEFAULT_PHOTO)
 fg = st.session_state.get("fg", None)
 sig = st.session_state.get("sig", DEFAULT_LOGO)
@@ -227,7 +332,7 @@ logo = DEFAULT_LOGO
 w_px, h_px = mm_to_px(PAGE[L["page"]][0]), mm_to_px(PAGE[L["page"]][1])
 page = Image.new("RGBA", (w_px, h_px), (255, 255, 255, 255))
 
-# 1. background fills page (with preset gradient)
+# background
 bg = ImageOps.fit(bg, (w_px, h_px), centering=(0.5, 0.5))
 if L["enhance"]:
     bg = auto_enhance(bg.convert("RGB")).convert("RGBA")
@@ -235,9 +340,9 @@ grad = mood_gradient(bg.size, PRESETS[L["preset"]]["top_col"], PRESETS[L["preset
 bg = Image.alpha_composite(bg, grad)
 page.paste(bg, (0, 0), bg)
 
-# 2. pre-defined rectangle for foreground + minimal drop-shadow
+# foreground area + drop-shadow
 if fg is not None:
-    base_w_mm, base_h_mm = 100, 140   # change here if you want
+    base_w_mm, base_h_mm = 100, 140
     w_area_mm = base_w_mm * (st.session_state.get("area_scale", 100) / 100)
     h_area_mm = base_h_mm * (st.session_state.get("area_scale", 100) / 100)
     w_area_px = mm_to_px(w_area_mm)
@@ -254,13 +359,11 @@ if fg is not None:
     anchor_y_mm += st.session_state.get("area_nudge_y", 0)
     anchor_x_px = mm_to_px(anchor_x_mm)
     anchor_y_px = mm_to_px(anchor_y_mm)
-
     fg_sized = ImageOps.fit(fg, (w_area_px, h_area_px), centering=(0.5, 0.5))
-    # minimal drop-shadow
     shadow = add_drop_shadow(fg_sized, offset_mm=2, blur=3, opacity=40)
     page.paste(shadow, (anchor_x_px - mm_to_px(2), anchor_y_px - mm_to_px(2)), shadow)
 
-# 3. logo & signature (unchanged)
+# logo & signature
 logo = logo.resize((int(logo.width * L["logo_scale"]/100), int(logo.height * L["logo_scale"]/100)))
 page.paste(logo, (mm_to_px(L["logo_x"]), mm_to_px(L["logo_y"])), logo)
 sign = sig.resize((int(sig.width * L["sig_scale"]/100), int(sig.height * L["sig_scale"]/100)))
@@ -268,33 +371,32 @@ alpha = sign.split()[-1].point(lambda p: p * 85 / 100)
 sign.putalpha(alpha)
 page.paste(sign, (mm_to_px(L["sig_x"]), mm_to_px(L["sig_y"])), sign)
 
-# 4. text blocks (unchanged)
+# text blocks
 draw = ImageDraw.Draw(page)
 left_px = mm_to_px(left_mm)
 
-header_font = ImageFont.truetype("arial.ttf", header_size)
-draw.text((left_px, mm_to_px(header_y_mm)), format_text(header_text, "Title Case"), font=header_font, fill=header_col)
+def _draw_text(draw, x, y, text, font_size, fill, wrap_width=40):
+    try:
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except IOError:
+        font = ImageFont.load_default()
+    lines = textwrap.wrap(text, width=wrap_width)
+    y_offset = 0
+    for line in lines:
+        draw.text((x, y + y_offset), line, font=font, fill=fill)
+        y_offset += font.getbbox(line)[3] + 5
+    return y_offset
 
-tag_font = ImageFont.truetype("arial.ttf", tag_size)
-draw.text((left_px, mm_to_px(tag_y_mm)), tag_text, font=tag_font, fill=tag_col)
-
-info_font = ImageFont.truetype("arial.ttf", info_size)
-lines = textwrap.wrap(info_text, width=info_wrap)
-y_offset = 0
-for line in lines:
-    draw.text((left_px, mm_to_px(info_y_mm) + y_offset), line, font=info_font, fill=info_col)
-    y_offset += info_font.getbbox(line)[3] + 5
-
-contact_font = ImageFont.truetype("arial.ttf", contact_size)
-contact_lines = textwrap.wrap(contact_text, width=contact_wrap)
-y_offset = 0
-for line in contact_lines:
-    draw.text((left_px, mm_to_px(contact_y_mm) + y_offset), line, font=contact_font, fill=contact_col)
-    y_offset += contact_font.getbbox(line)[3] + 4)
+_draw_text(draw, left_px, mm_to_px(header_y_mm), format_text(header_text, "Title Case"), header_size, header_col)
+_draw_text(draw, left_px, mm_to_px(tag_y_mm), tag_text, tag_size, tag_col)
+_draw_text(draw, left_px, mm_to_px(info_y_mm), info_text, info_size, info_col, info_wrap)
+_draw_text(draw, left_px, mm_to_px(contact_y_mm), contact_text, contact_size, contact_col, contact_wrap)
 
 st.image(page, use_column_width=True, caption=f"Preview – {L['page']}  {PAGE[L['page']][0]}×{PAGE[L['page']][1]} mm")
 
-# ---------- SOCIAL EXPORT ----------
+# ---------------------------------------------------------
+#  EXPORT
+# ---------------------------------------------------------
 if st.button("Generate file", key="gen_final"):
     st.session_state.preview_generated = True
 
@@ -308,7 +410,6 @@ if st.session_state.get("preview_generated", False):
     st.download_button("💾 Download JPEG", buf.getvalue(),
                        file_name=f"journal_{L['page'].replace(' ','_')}_{dpi_out}dpi.jpg",
                        mime="image/jpeg")
-    # GIF export (only if foreground exists)
     if fg is not None:
         gif_bytes = make_gif(page, fg_sized, (anchor_x_px, anchor_y_px))
         st.download_button("📥 Download GIF (spin)", gif_bytes,
