@@ -2,20 +2,17 @@
 import io, os, textwrap, math, requests, streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageFilter
 from groq import Groq
+from typing import Tuple
 
 # ---------------------------------------------------------
-#  GROQ CLIENT (cached singleton)
+#  GROQ VISION  (cached singleton + call)
 # ---------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _groq_client():
     return Groq(api_key=os.getenv("groq_key"))
 
-# ---------------------------------------------------------
-#  VISION PROMPT -> 5 FIELDS
-# ---------------------------------------------------------
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=3600)
 def describe_image_cached(_img_bytes: bytes) -> str:
-    """Return Groq vision answer – cached by image bytes."""
     client = _groq_client()
     completion = client.chat.completions.create(
         model="llama-3.2-90b-vision-preview",
@@ -36,14 +33,8 @@ def describe_image_cached(_img_bytes: bytes) -> str:
     )
     return completion.choices[0].message.content
 
-def describe_image(img: Image.Image) -> str:
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return describe_image_cached(buf.getvalue())
-
 # ---------------------------------------------------------
-#  COSMETIC BG (glowing circles)
+#  COSMETIC BG  (glowing circles – never touches photo)
 # ---------------------------------------------------------
 _BRAND = {"aqua": "#00F5FF", "lime": "#ADFF2F", "magenta": "#FF00FF", "dark": "#111827"}
 st.set_page_config(page_title="Journal Composer", layout="wide")
@@ -66,10 +57,10 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-#  IMAGE HELPERS (cached)
-# ---------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_url_image(url):
+#  CACHED IMAGE HELPERS
+# -----------------------------------------------------------
+@st.cache_data(show_spinner=False, max_entries=50)
+def load_url_image(url: str) -> Image.Image:
     return Image.open(requests.get(url, stream=True, timeout=10).raw).convert("RGBA")
 
 LOGO_URL    = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
@@ -84,9 +75,10 @@ PAGE = {
 }
 DPI = 300
 MM_TO_PX = DPI / 25.4
-def mm_to_px(mm): return int(mm * MM_TO_PX)
+def mm_to_px(mm: float) -> int:
+    return int(mm * MM_TO_PX)
 
-def format_text(text, mode):
+def format_text(text: str, mode: str) -> str:
     if mode == "Title Case": return text.title()
     if mode == "Sentence case": return text.capitalize()
     if mode == "UPPER CASE": return text.upper()
@@ -95,7 +87,6 @@ def format_text(text, mode):
 
 @st.cache_data(show_spinner=False)
 def add_drop_shadow(img: Image.Image, offset_mm=2, blur=3, opacity=40) -> Image.Image:
-    """Pure-PIL drop shadow – no OpenCV."""
     shadow = Image.new("RGBA", (img.width + mm_to_px(offset_mm)*2, img.height + mm_to_px(offset_mm)*2), (0,0,0,0))
     draw = ImageDraw.Draw(shadow)
     draw.rectangle([mm_to_px(offset_mm), mm_to_px(offset_mm),
@@ -106,29 +97,15 @@ def add_drop_shadow(img: Image.Image, offset_mm=2, blur=3, opacity=40) -> Image.
     return shadow
 
 @st.cache_data(show_spinner=False)
-def mood_gradient(size, top_col, bottom_col):
-    w, h = size
-    grad = Image.new("RGBA", (w, h), top_col)
-    top_rgb    = tuple(int(top_col[i:i+2], 16) for i in (1,3,5))
-    bottom_rgb = tuple(int(bottom_col[i:i+2], 16) for i in (1,3,5))
-    for y in range(h):
-        ratio = y / h
-        r = int(top_rgb[0]*(1-ratio) + bottom_rgb[0]*ratio)
-        g = int(top_rgb[1]*(1-ratio) + bottom_rgb[1]*ratio)
-        b = int(top_rgb[2]*(1-ratio) + bottom_rgb[2]*ratio)
-        ImageDraw.Draw(grad).line([(0, y), (w, y)], fill=(r, g, b, 180))
-    return grad
-
-@st.cache_data(show_spinner=False)
 def auto_enhance(img: Image.Image) -> Image.Image:
     img = ImageOps.autocontrast(img)
     return ImageEnhance.Color(img).enhance(1.15)
 
 PRESETS = {
-    "Morning light": {"top_col": "#FFD700", "bottom_col": "#8B4513", "note_col": "#4F4F4F", "sig_opacity": 90},
-    "Night dark":    {"top_col": "#1E1E1E", "bottom_col": "#3E2723", "note_col": "#E0E0E0", "sig_opacity": 80},
-    "Vintage":       {"top_col": "#FFE4B5", "bottom_col": "#A0522D", "note_col": "#795548", "sig_opacity": 85},
-    "Minimal b&w":   {"top_col": "#FFFFFF", "bottom_col": "#CCCCCC", "note_col": "#000000", "sig_opacity": 70},
+    "Morning light": {"bg_col": "#FFFFFF", "note_col": "#4F4F4F", "sig_opacity": 90},
+    "Night dark":    {"bg_col": "#1E1E1E", "note_col": "#E0E0E0", "sig_opacity": 80},
+    "Vintage":       {"bg_col": "#FFF8E1", "note_col": "#795548", "sig_opacity": 85},
+    "Minimal b&w":   {"bg_col": "#FFFFFF", "note_col": "#000000", "sig_opacity": 70},
 }
 
 # ---------------------------------------------------------
@@ -162,23 +139,30 @@ with st.sidebar:
         bg_file = st.file_uploader("Upload background (jpg/png) – optional", type=["jpg", "jpeg", "png"])
         sig_file = st.file_uploader("Upload signature (optional)", type=["png"])
         fg_file  = st.file_uploader("Upload foreground PNG (transparent) – optional", type=["png"])
-        if bg_file is not None:
-            st.session_state.user_bg = Image.open(bg_file).convert("RGBA")
-            st.session_state.bg      = st.session_state.user_bg
-        else:
-            st.session_state.bg = DEFAULT_PHOTO
-        if sig_file is not None:
-            st.session_state.user_sig = Image.open(sig_file).convert("RGBA")
-            st.session_state.sig      = st.session_state.user_sig
-        else:
-            st.session_state.sig = DEFAULT_LOGO
-        if fg_file is not None:
-            st.session_state.user_fg = Image.open(fg_file).convert("RGBA")
-            st.session_state.fg      = st.session_state.user_fg
-        else:
-            st.session_state.fg = None
 
-        if fg_file is not None:
+        # ---- handle uploads (bytes only) ----
+        if bg_file:
+            bg_bytes = bg_file.read()
+            st.session_state.bg_bytes = bg_bytes
+        else:
+            bg_bytes = None
+            st.session_state.bg_bytes = None
+
+        if sig_file:
+            sig_bytes = sig_file.read()
+            st.session_state.sig_bytes = sig_bytes
+        else:
+            sig_bytes = None
+            st.session_state.sig_bytes = None
+
+        if fg_file:
+            fg_bytes = fg_file.read()
+            st.session_state.fg_bytes = fg_bytes
+        else:
+            fg_bytes = None
+            st.session_state.fg_bytes = None
+
+        if fg_file:
             st.subheader("Foreground area")
             base_w_mm, base_h_mm = 100, 140
             w_area_mm = base_w_mm * (st.session_state.get("area_scale", 100) / 100)
@@ -245,15 +229,33 @@ with st.sidebar:
         # ---------- AI COPY FROM IMAGE ----------
         st.header("4. ✨ AI copy from image")
         if st.button("Generate headline / tag / note / description / caption from image"):
-            w_px, h_px = mm_to_px(PAGE[L["page"]][0]), mm_to_px(PAGE[L["page"]][1])
-            composite = Image.new("RGBA", (w_px, h_px), (255, 255, 255, 255))
-            bg = st.session_state.get("bg", DEFAULT_PHOTO)
-            bg = ImageOps.fit(bg, (w_px, h_px), centering=(0.5, 0.5))
-            if L["enhance"]:
-                bg = auto_enhance(bg.convert("RGB")).convert("RGBA")
-            grad = mood_gradient(bg.size, PRESETS[L["preset"]]["top_col"], PRESETS[L["preset"]]["bottom_col"])
-            composite = Image.alpha_composite(bg, grad)
-            answer = describe_image(composite)
+            bg_bytes = st.session_state.get("bg_bytes")
+            if not bg_bytes:
+                st.error("Please upload a background image first.")
+                st.stop()
+            composite = build_preview(
+                PAGE[L["page"]],
+                bg_bytes,
+                st.session_state.get("fg_bytes"),
+                st.session_state.get("sig_bytes"),
+                L["preset"],
+                L["enhance"],
+                st.session_state.get("area_scale", 100),
+                st.session_state.get("area_preset", "Centre"),
+                st.session_state.get("area_nudge_x", 0),
+                st.session_state.get("area_nudge_y", 0),
+                L["logo_scale"], (L["logo_x"], L["logo_y"]),
+                L["sig_scale"], (L["sig_x"], L["sig_y"]),
+                20,
+                "", 0, "", 0,  # header dummy
+                "", 0, "", 0,  # tag dummy
+                "", 0, "", 0, 45,
+                "", 0, "", 0, 60,
+                L["text_format"]
+            )
+            buf = io.BytesIO()
+            composite.save(buf, format="PNG")
+            answer = describe_image_cached(buf.getvalue())
             try:
                 headline, tag, note, desc, capt = [a.strip() for a in answer.split("|", 4)]
             except ValueError:
@@ -265,80 +267,59 @@ with st.sidebar:
             st.rerun()
 
 # ---------------------------------------------------------
-#  PREVIEW
+#  PREVIEW  (cached)
 # ---------------------------------------------------------
-bg = st.session_state.get("bg", DEFAULT_PHOTO)
-fg = st.session_state.get("fg", None)
-sig = st.session_state.get("sig", DEFAULT_LOGO)
-logo = DEFAULT_LOGO
+bg_bytes = st.session_state.get("bg_bytes")
+fg_bytes = st.session_state.get("fg_bytes")
+sig_bytes = st.session_state.get("sig_bytes")
 
-w_px, h_px = mm_to_px(PAGE[L["page"]][0]), mm_to_px(PAGE[L["page"]][1])
-page = Image.new("RGBA", (w_px, h_px), (255, 255, 255, 255))
+header_text  = st.session_state.get("header_in", "My Product")
+header_size  = st.session_state.get("header_size", 125)
+header_col   = st.session_state.get("header_col", "#000000")
+header_y_mm  = st.session_state.get("header_y_mm", 30)
 
-# background
-bg = ImageOps.fit(bg, (w_px, h_px), centering=(0.5, 0.5))
-if L["enhance"]:
-    bg = auto_enhance(bg.convert("RGB")).convert("RGBA")
-grad = mood_gradient(bg.size, PRESETS[L["preset"]]["top_col"], PRESETS[L["preset"]]["bottom_col"])
-bg = Image.alpha_composite(bg, grad)
-page.paste(bg, (0, 0), bg)
+tag_text     = st.session_state.get("tag_in", "The best thing since sliced bread.")
+tag_size     = st.session_state.get("tag_size", 65)
+tag_col      = st.session_state.get("tag_col", "#555555")
+tag_y_mm     = st.session_state.get("tag_y_mm", 50)
 
-# foreground area + drop-shadow
-if fg is not None:
-    base_w_mm, base_h_mm = 100, 140
-    w_area_mm = base_w_mm * (st.session_state.get("area_scale", 100) / 100)
-    h_area_mm = base_h_mm * (st.session_state.get("area_scale", 100) / 100)
-    w_area_px = mm_to_px(w_area_mm)
-    h_area_px = mm_to_px(h_area_mm)
-    anchors = {
-        "Top-left": (0, 0),
-        "Top-right": (PAGE[L["page"]][0] - w_area_mm, 0),
-        "Bottom-left": (0, PAGE[L["page"]][1] - h_area_mm),
-        "Bottom-right": (PAGE[L["page"]][0] - w_area_mm, PAGE[L["page"]][1] - h_area_mm),
-        "Centre": ((PAGE[L["page"]][0] - w_area_mm) / 2, (PAGE[L["page"]][1] - h_area_mm) / 2),
-    }
-    anchor_x_mm, anchor_y_mm = anchors[st.session_state.get("area_preset", "Centre")]
-    anchor_x_mm += st.session_state.get("area_nudge_x", 0)
-    anchor_y_mm += st.session_state.get("area_nudge_y", 0)
-    anchor_x_px = mm_to_px(anchor_x_mm)
-    anchor_y_px = mm_to_px(anchor_y_mm)
-    fg_sized = ImageOps.fit(fg, (w_area_px, h_area_px), centering=(0.5, 0.5))
-    shadow = add_drop_shadow(fg_sized, offset_mm=2, blur=3, opacity=40)
-    page.paste(shadow, (anchor_x_px - mm_to_px(2), anchor_y_px - mm_to_px(2)), shadow)
+info_text    = st.session_state.get("info_in", "Describe your product here.\nYou can write several sentences.")
+info_size    = st.session_state.get("info_size", 85)
+info_col     = st.session_state.get("info_col", "#333333")
+info_y_mm    = st.session_state.get("info_y_mm", 70)
+info_wrap    = st.session_state.get("info_wrap", 45)
 
-# logo & signature
-logo = logo.resize((int(logo.width * L["logo_scale"]/100), int(logo.height * L["logo_scale"]/100)))
-page.paste(logo, (mm_to_px(L["logo_x"]), mm_to_px(L["logo_y"])), logo)
-sign = sig.resize((int(sig.width * L["sig_scale"]/100), int(sig.height * L["sig_scale"]/100)))
-alpha = sign.split()[-1].point(lambda p: p * 85 // 100)
-sign.putalpha(alpha)
-page.paste(sign, (mm_to_px(L["sig_x"]), mm_to_px(L["sig_y"])), sign)
+contact_text = st.session_state.get("contact_in", "Email: hello@example.com\nPhone: +1 234 567 890")
+contact_size = st.session_state.get("contact_size", 70)
+contact_col  = st.session_state.get("contact_col", "#444444")
+contact_y_mm = st.session_state.get("contact_y_mm", PAGE[L["page"]][1] - 30)
+contact_wrap = st.session_state.get("contact_wrap", 60)
 
-# text blocks
-draw = ImageDraw.Draw(page)
-left_px = mm_to_px(left_mm)
+page_img = build_preview(
+    PAGE[L["page"]],
+    bg_bytes,
+    fg_bytes,
+    sig_bytes,
+    L["preset"],
+    L["enhance"],
+    st.session_state.get("area_scale", 100),
+    st.session_state.get("area_preset", "Centre"),
+    st.session_state.get("area_nudge_x", 0),
+    st.session_state.get("area_nudge_y", 0),
+    L["logo_scale"], (L["logo_x"], L["logo_y"]),
+    L["sig_scale"], (L["sig_x"], L["sig_y"]),
+    20,
+    header_text, header_size, header_col, header_y_mm,
+    tag_text, tag_size, tag_col, tag_y_mm,
+    info_text, info_size, info_col, info_y_mm, info_wrap,
+    contact_text, contact_size, contact_col, contact_y_mm, contact_wrap,
+    L["text_format"]
+)
 
-def _draw_text(draw, x, y, text, font_size, fill, wrap_width=40):
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except IOError:
-        font = ImageFont.load_default()
-    lines = textwrap.wrap(text, width=wrap_width)
-    y_offset = 0
-    for line in lines:
-        draw.text((x, y + y_offset), line, font=font, fill=fill)
-        y_offset += font.getbbox(line)[3] + 5
-    return y_offset
-
-_draw_text(draw, left_px, mm_to_px(header_y_mm), format_text(header_text, "Title Case"), header_size, header_col)
-_draw_text(draw, left_px, mm_to_px(tag_y_mm), tag_text, tag_size, tag_col)
-_draw_text(draw, left_px, mm_to_px(info_y_mm), info_text, info_size, info_col, info_wrap)
-_draw_text(draw, left_px, mm_to_px(contact_y_mm), contact_text, contact_size, contact_col, contact_wrap)
-
-st.image(page, use_column_width=True, caption=f"Preview – {L['page']}  {PAGE[L['page']][0]}×{PAGE[L['page']][1]} mm")
+st.image(page_img, use_column_width=True, caption=f"Preview – {L['page']}  {PAGE[L['page']][0]}×{PAGE[L['page']][1]} mm")
 
 # ---------------------------------------------------------
-#  EXPORT (JPEG only – no GIF)
+#  EXPORT  (JPEG only – no GIF)
 # ---------------------------------------------------------
 if st.button("Generate file", key="gen_final"):
     st.session_state.preview_generated = True
@@ -346,10 +327,10 @@ if st.button("Generate file", key="gen_final"):
 if st.session_state.get("preview_generated", False):
     dpi_out = L["export_dpi"]
     scale   = dpi_out / 300.0
-    out_size = (int(page.width * scale), int(page.height * scale))
-    out_img  = page.resize(out_size, Image.LANCZOS).convert("RGB")
+    out_size = (int(page_img.width * scale), int(page_img.height * scale))
+    out_img  = page_img.resize(out_size, Image.LANCZOS)
     buf = io.BytesIO()
-    out_img.save(buf, format="JPEG", quality=95, dpi=(dpi_out, dpi_out))
+    out_img.save(buf, format="JPEG", quality=90, dpi=(dpi_out, dpi_out))
     st.download_button("💾 Download JPEG", buf.getvalue(),
                        file_name=f"journal_{L['page'].replace(' ','_')}_{dpi_out}dpi.jpg",
                        mime="image/jpeg")
