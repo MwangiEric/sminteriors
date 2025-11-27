@@ -1,7 +1,8 @@
-# streamlit_app.py  –  crash-resistant starter
-import io, os, textwrap, requests, streamlit as st
+# streamlit_app.py  –  solid-brown, default-font, crash-proof
+import io, os, textwrap, requests, hashlib, streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageFilter
 from groq import Groq
+from typing import Tuple
 
 # ---------------------------------------------------------
 #  1.  DIAGNOSTICS:  always show traceback
@@ -12,56 +13,67 @@ try:
     st.set_page_config(page_title="Journal Composer", layout="wide")
 
     # ---------------------------------------------------------
-    #  2.  LIVE LOG  (appears in Cloud logs)
+    #  2.  LIVE LOG  (appears in Cloud logs + browser)
     # ---------------------------------------------------------
     def log(msg):
-        st.write(f"🔍  {msg}")      # also visible in browser
+        st.write(f"🔍  {msg}")      # browser
         print(msg)                # Cloud console
 
     log("----  app start  ----")
 
     # ---------------------------------------------------------
-    #  3.  USER UPLOADS BACKGROUND
+    #  3.  SOLID BROWN BACKGROUND  (no CSS, no flashes)
     # ---------------------------------------------------------
-    bg_file = st.file_uploader("Upload background (jpg/png) – optional", type=["jpg", "jpeg", "png"])
-    if bg_file:
-        bg_img = Image.open(bg_file).convert("RGBA")
-        log(f"user bg  {bg_img.size}")
-    else:
-        # solid colour fallback – no external URL
-        bg_img = Image.new("RGBA", (600, 900), "#FFFFFF")
-        log("using solid-white fallback bg")
+    BACKGROUND_COLOUR = "#8B4513"   # saddle-brown – change here
+    PAGE_MM = (210, 297)            # A4 portrait
+    DPI     = 300
+    MM_TO_PX = DPI / 25.4
+    def mm_to_px(mm: float) -> int:
+        return int(mm * MM_TO_PX)
 
     # ---------------------------------------------------------
-    #  4.  OPTIONAL FOREGROUND  (product)
+    #  4.  SAFE OPEN + RESIZE  (max 5 MB pixel buffer)
     # ---------------------------------------------------------
-    fg_file = st.file_uploader("Upload product PNG (transparent) – optional", type=["png"])
-    if fg_file:
-        fg_img = Image.open(fg_file).convert("RGBA")
-        log(f"user fg  {fg_img.size}")
-    else:
-        fg_img = None
+    MAX_PIXELS = 5_000_000   # ~ 5 MB RGBA
+
+    def safe_open(upload, name: str) -> Image.Image:
+        if not upload:
+            log(f"{name}: none → solid brown fallback")
+            return Image.new("RGBA", (600, 900), BACKGROUND_COLOUR)
+        if upload.size > 20 * 1024 * 1024:
+            st.error(f"{name} must be < 20 MB")
+            st.stop()
+        try:
+            img = Image.open(io.BytesIO(upload.read())).convert("RGBA")
+            log(f"{name} original {img.size}  mode={img.mode}")
+            if img.width * img.height > MAX_PIXELS:
+                ratio = (MAX_PIXELS / (img.width * img.height)) ** 0.5
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+                log(f"{name} resized → {img.size}")
+            return img
+        except Exception as e:
+            log(f"{name} open failed: {e}")
+            st.error(f"{name} is corrupted or not an image")
+            st.stop()
 
     # ---------------------------------------------------------
-    #  5.  OPTIONAL SIGNATURE  (logo)
+    #  5.  UPLOADS  (re-open every run – no EOF)
     # ---------------------------------------------------------
-    sig_file = st.file_uploader("Upload signature PNG – optional", type=["png"])
-    if sig_file:
-        sig_img = Image.open(sig_file).convert("RGBA")
-        log(f"user sig  {sig_img.size}")
-    else:
-        sig_img = None
+    bg_file = st.file_uploader("Background (jpg/png) – optional", type=["jpg", "jpeg", "png"])
+    bg_img  = safe_open(bg_file, "bg")
+
+    fg_file = st.file_uploader("Product PNG (transparent) – optional", type=["png"])
+    fg_img  = safe_open(fg_file, "fg")
+
+    sig_file = st.file_uploader("Signature PNG – optional", type=["png"])
+    sig_img = safe_open(sig_file, "sig")
 
     # ---------------------------------------------------------
     #  6.  SIMPLE LAYOUT  (hard-coded for now)
     # ---------------------------------------------------------
-    PAGE_MM = (210, 297)          # A4 portrait
-    DPI     = 300
-    MM_TO_PX = DPI / 25.4
-    def mm_to_px(mm): return int(mm * MM_TO_PX)
-
     w_px, h_px = mm_to_px(PAGE_MM[0]), mm_to_px(PAGE_MM[1])
-    canvas = Image.new("RGBA", (w_px, h_px), "#FFFFFF")
+    canvas = Image.new("RGBA", (w_px, h_px), BACKGROUND_COLOUR)
 
     # background (fit to page)
     bg = ImageOps.fit(bg_img, (w_px, h_px), centering=(0.5, 0.5))
@@ -80,7 +92,9 @@ try:
     # signature (bottom-right, 20 % size)
     if sig_img:
         sign = sig_img.resize((int(sig_img.width * 0.20), int(sig_img.height * 0.20)))
-        canvas.paste(sign, (w_px - sign.width - mm_to_px(15), h_px - sign.height - mm_to_px(15)), sign)
+        # duplicate guard
+        if hashlib.md5(sig_img.tobytes()).hexdigest() != hashlib.md5(Image.new("RGBA", (1, 1), "#000000").tobytes()):
+            canvas.paste(sign, (w_px - sign.width - mm_to_px(15), h_px - sign.height - mm_to_px(15)), sign)
 
     # ---------------------------------------------------------
     #  7.  TEXT  (default font only)
