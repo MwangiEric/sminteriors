@@ -1,40 +1,56 @@
 # streamlit_app.py
-import io, os, textwrap, math, requests, streamlit as st
+import io, os, textwrap, requests, hashlib, streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageFilter
 from groq import Groq
-from typing import Tuple
 
 # ---------------------------------------------------------
-#  GROQ VISION  (cached singleton + call)
+#  1.  FEATURE FLAGS & SESSION STATE
+# ---------------------------------------------------------
+if "saas_layout" not in st.session_state:
+    st.session_state.saas_layout = False
+if "prod_width_pct" not in st.session_state:
+    st.session_state.prod_width_pct = 80
+if "prod_height_pct" not in st.session_state:
+    st.session_state.prod_height_pct = 40
+if "auto_fit" not in st.session_state:
+    st.session_state.auto_fit = True
+if "note_text" not in st.session_state:   # dead key kept for backward compat
+    st.session_state.note_text = "Today's reflections…"
+if "preview_generated" not in st.session_state:
+    st.session_state.preview_generated = False
+
+# ---------------------------------------------------------
+#  2.  GROQ VISION (cached)
 # ---------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _groq_client():
     return Groq(api_key=os.getenv("groq_key"))
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def describe_image_cached(_img_bytes: bytes) -> str:
-    client = _groq_client()
-    completion = client.chat.completions.create(
-        model="llama-3.2-90b-vision-preview",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": (
-                    "You are a creative copy-writer. Look at the image and return ONLY five short lines "
-                    "separated by '|': 1) HEADLINE (4-6 words), 2) TAG-LINE (8-12 words), 3) SIDE-NOTE (3-5 words), "
-                    "4) PRODUCT-DESCRIPTION (20-30 words), 5) CAPTION & HASHTAGS (15-25 words incl. 3-5 hashtags). "
-                    "Do NOT add labels or numbers, just the five strings separated by '|'."
-                )},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_img_bytes.encode('utf-8').hex()}"}}
-            ]
-        }],
-        temperature=0.7,
-        max_tokens=400
-    )
-    return completion.choices[0].message.content
+def describe_image_cached(_img_hash: str) -> str:
+    with st.spinner("AI is writing your copy…"):
+        client = _groq_client()
+        completion = client.chat.completions.create(
+            model="llama-3.2-90b-vision-preview",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": (
+                        "You are a creative copy-writer. Look at the image and return ONLY five short lines "
+                        "separated by '|': 1) HEADLINE (4-6 words), 2) TAG-LINE (8-12 words), 3) SIDE-NOTE (3-5 words), "
+                        "4) PRODUCT-DESCRIPTION (20-30 words), 5) CAPTION & HASHTAGS (15-25 words incl. 3-5 hashtags). "
+                        "Do NOT add labels or numbers, just the five strings separated by '|'."
+                    )},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_img_hash.encode('utf-8').hex()}"}}
+                ]
+            }],
+            temperature=0.7,
+            max_tokens=400
+        )
+        return completion.choices[0].message.content
 
 # ---------------------------------------------------------
-#  COSMETIC BG  (glowing circles – never touches photo)
+#  3.  COSMETIC BG (glowing circles – never over photo)
 # ---------------------------------------------------------
 _BRAND = {"aqua": "#00F5FF", "lime": "#ADFF2F", "magenta": "#FF00FF", "dark": "#111827"}
 st.set_page_config(page_title="Journal Composer", layout="wide")
@@ -57,8 +73,8 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-#  CACHED IMAGE HELPERS
-# -----------------------------------------------------------
+#  4.  CACHED HELPERS
+# ---------------------------------------------------------
 @st.cache_data(show_spinner=False, max_entries=50)
 def load_url_image(url: str) -> Image.Image:
     return Image.open(requests.get(url, stream=True, timeout=10).raw).convert("RGBA")
@@ -79,10 +95,10 @@ def mm_to_px(mm: float) -> int:
     return int(mm * MM_TO_PX)
 
 def format_text(text: str, mode: str) -> str:
-    if mode == "Title Case": return text.title()
+    if mode == "Title Case":    return text.title()
     if mode == "Sentence case": return text.capitalize()
-    if mode == "UPPER CASE": return text.upper()
-    if mode == "lower case": return text.lower()
+    if mode == "UPPER CASE":    return text.upper()
+    if mode == "lower case":    return text.lower()
     return text
 
 @st.cache_data(show_spinner=False)
@@ -109,7 +125,7 @@ PRESETS = {
 }
 
 # ---------------------------------------------------------
-#  SESSION STATE
+#  5.  SESSION STATE (layout + SaaS flags)
 # ---------------------------------------------------------
 if "layout" not in st.session_state:
     st.session_state.layout = dict(
@@ -121,15 +137,40 @@ if "layout" not in st.session_state:
     )
 if "page" not in st.session_state.layout:
     st.session_state.layout["page"] = "A4 portrait"
-if "note_text" not in st.session_state:
-    st.session_state.note_text = "Today's reflections…"
 if "preview_generated" not in st.session_state:
     st.session_state.preview_generated = False
 
 L = st.session_state.layout
 
 # ---------------------------------------------------------
-#  SIDEBAR
+#  6.  AUTO-FIT TEXT  (cached)
+# ---------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def fit_text(draw: ImageDraw.Draw,
+             text: str,
+             max_w_mm: float, max_h_mm: float,
+             start_pt: int = 200,
+             min_pt: int = 20,
+             wrap_width: int = 40) -> tuple[ImageFont.FreeTypeFont, list[str]]:
+    """Return font and wrapped lines that fit inside max_mm rectangle."""
+    max_w_px = mm_to_px(max_w_mm)
+    max_h_px = mm_to_px(max_h_mm)
+    for pt in range(start_pt, min_pt - 1, -2):
+        try:
+            font = ImageFont.truetype("arial.ttf", pt)
+        except IOError:
+            font = ImageFont.load_default()
+        lines = textwrap.wrap(text, width=wrap_width)
+        if not lines:
+            return font, [""]
+        w = max(font.getbbox(line)[2] for line in lines)
+        h = sum(font.getbbox(line)[3] + 5 for line in lines)
+        if w <= max_w_px and h <= max_h_px:
+            return font, lines
+    return font, lines
+
+# ---------------------------------------------------------
+#  7.  SIDEBAR
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("📔 Journal Composer")
@@ -139,6 +180,12 @@ with st.sidebar:
         bg_file = st.file_uploader("Upload background (jpg/png) – optional", type=["jpg", "jpeg", "png"])
         sig_file = st.file_uploader("Upload signature (optional)", type=["png"])
         fg_file  = st.file_uploader("Upload foreground PNG (transparent) – optional", type=["png"])
+
+        # ---- guard 10 MB ----
+        for f in [bg_file, sig_file, fg_file]:
+            if f and f.size > 10 * 1024 * 1024:
+                st.error(f"{f.name} must be < 10 MB")
+                st.stop()
 
         # ---- handle uploads (bytes only) ----
         if bg_file:
@@ -162,8 +209,9 @@ with st.sidebar:
             fg_bytes = None
             st.session_state.fg_bytes = None
 
+        # ---- old rectangle sliders (still work) ----
         if fg_file:
-            st.subheader("Foreground area")
+            st.subheader("Foreground / Product rectangle")
             base_w_mm, base_h_mm = 100, 140
             w_area_mm = base_w_mm * (st.session_state.get("area_scale", 100) / 100)
             h_area_mm = base_h_mm * (st.session_state.get("area_scale", 100) / 100)
@@ -194,6 +242,24 @@ with st.sidebar:
 
         st.header("3. Text blocks")
         left_mm = st.slider("Text left indent (mm)", 0, 50, 20)
+
+        # ---- auto-fit section ----
+        with st.sidebar.expander("🔍 Auto-fit text (optional)", expanded=False):
+            auto_fit = st.checkbox("Auto-size text to box", value=True, key="auto_fit")
+            if auto_fit:
+                c1, c2 = st.columns(2)
+                with c1:
+                    head_box_w = st.number_input("Headline box width (mm)", 30, 200, 100, 5, key="head_box_w")
+                    head_box_h = st.number_input("Headline box height (mm)", 10, 100, 25, 5, key="head_box_h")
+                with c2:
+                    tag_box_w  = st.number_input("Tag box width (mm)", 30, 200, 120, 5, key="tag_box_w")
+                    tag_box_h  = st.number_input("Tag box height (mm)", 10, 100, 20, 5, key="tag_box_h")
+                # contrast check
+                bg_rgb   = tuple(int(PRESETS[L["preset"]]["bg_col"][i:i+2], 16) for i in (1,3,5))
+                head_rgb = tuple(int(st.session_state.get("header_col", "#000000")[i:i+2], 16) for i in (1,3,5))
+                contrast = (max(bg_rgb + head_rgb) + 0.05) / (min(bg_rgb + head_rgb) + 0.05)
+                if contrast < 4.5:
+                    st.warning(f"Headline contrast {contrast:.1f} < 4.5 (WCAG)")
 
         st.subheader("Header")
         header_text = st.text_input("Header", "My Product", key="header_in")
@@ -226,36 +292,30 @@ with st.sidebar:
         L["enhance"] = st.checkbox("Auto-enhance photo", L["enhance"])
         L["export_dpi"] = st.radio("Export DPI", [72, 150, 300], index=2)
 
-        # ---------- AI COPY FROM IMAGE ----------
-        st.header("4. ✨ AI copy from image")
+        # ---- SaaS toggle + new controls ----
+        st.header("5. SaaS predefined layout")
+        saas_on = st.checkbox("Use SaaS layout (logo TL, headline TM, product centre, price BL, cta BR, contact BC)", value=st.session_state.saas_layout)
+        st.session_state.saas_layout = saas_on
+        if saas_on:
+            st.subheader("SaaS texts")
+            price_text = st.text_input("Price", "$49.99", key="price_in")
+            price_col  = st.color_picker("Price colour", "#FF0000", key="price_col")
+            cta_text   = st.text_input("CTA", "Buy Now →", key="cta_in")
+            cta_col    = st.color_picker("CTA colour", "#FFFFFF", key="cta_col")
+
+            st.subheader("Product-image geometry")
+            prod_w_pct = st.slider("Product width % of page", 50, 95, st.session_state.prod_width_pct, 5, key="prod_width_pct")
+            prod_h_pct = st.slider("Product height % of page", 20, 70, st.session_state.prod_height_pct, 5, key="prod_height_pct")
+            st.caption("Anchor & nudge use the same sliders as the foreground rectangle above.")
+
+        # ---- AI copy ----
         if st.button("Generate headline / tag / note / description / caption from image"):
             bg_bytes = st.session_state.get("bg_bytes")
             if not bg_bytes:
                 st.error("Please upload a background image first.")
                 st.stop()
-            composite = build_preview(
-                PAGE[L["page"]],
-                bg_bytes,
-                st.session_state.get("fg_bytes"),
-                st.session_state.get("sig_bytes"),
-                L["preset"],
-                L["enhance"],
-                st.session_state.get("area_scale", 100),
-                st.session_state.get("area_preset", "Centre"),
-                st.session_state.get("area_nudge_x", 0),
-                st.session_state.get("area_nudge_y", 0),
-                L["logo_scale"], (L["logo_x"], L["logo_y"]),
-                L["sig_scale"], (L["sig_x"], L["sig_y"]),
-                20,
-                "", 0, "", 0,  # header dummy
-                "", 0, "", 0,  # tag dummy
-                "", 0, "", 0, 45,
-                "", 0, "", 0, 60,
-                L["text_format"]
-            )
-            buf = io.BytesIO()
-            composite.save(buf, format="PNG")
-            answer = describe_image_cached(buf.getvalue())
+            img_hash = hashlib.md5(bg_bytes).hexdigest()
+            answer = describe_image_cached(img_hash)
             try:
                 headline, tag, note, desc, capt = [a.strip() for a in answer.split("|", 4)]
             except ValueError:
@@ -267,70 +327,254 @@ with st.sidebar:
             st.rerun()
 
 # ---------------------------------------------------------
-#  PREVIEW  (cached)
+#  8.  CACHED PREVIEW BUILDERS
 # ---------------------------------------------------------
-bg_bytes = st.session_state.get("bg_bytes")
-fg_bytes = st.session_state.get("fg_bytes")
-sig_bytes = st.session_state.get("sig_bytes")
+@st.cache_data(show_spinner=False)
+def build_old_preview(
+    page_mm: tuple[int, int],
+    bg_bytes: bytes | None,
+    fg_bytes: bytes | None,
+    sig_bytes: bytes | None,
+    preset_name: str,
+    enhance: bool,
+    logo_scale: int, logo_xy: tuple[int, int],
+    sig_scale: int, sig_xy: tuple[int, int],
+    left_mm: int,
+    header_txt: str, header_sz: int, header_col: str, header_y_mm: int,
+    tag_txt: str, tag_sz: int, tag_col: str, tag_y_mm: int,
+    info_txt: str, info_sz: int, info_col: str, info_y_mm: int, info_wrap: int,
+    contact_txt: str, contact_sz: int, contact_col: str, contact_y_mm: int, contact_wrap: int,
+    text_format: str,
+    area_preset: str, area_scale: int, nudge_x: int, nudge_y: int,
+    auto_fit: bool,
+    head_box: tuple[float, float], tag_box: tuple[float, float]
+) -> Image.Image:
+    """Free-layout builder (no gradient over photo)."""
+    w_mm, h_mm = page_mm
+    w_px, h_px = mm_to_px(w_mm), mm_to_px(h_mm)
 
-header_text  = st.session_state.get("header_in", "My Product")
-header_size  = st.session_state.get("header_size", 125)
-header_col   = st.session_state.get("header_col", "#000000")
-header_y_mm  = st.session_state.get("header_y_mm", 30)
+    # background
+    if bg_bytes:
+        bg = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
+    else:
+        bg = DEFAULT_PHOTO
+    bg = ImageOps.fit(bg, (w_px, h_px), centering=(0.5, 0.5))
+    if enhance:
+        bg = auto_enhance(bg.convert("RGB")).convert("RGBA")
+    canvas = Image.new("RGBA", (w_px, h_px), PRESETS[preset_name]["bg_col"])
+    canvas.paste(bg, (0, 0), bg)
 
-tag_text     = st.session_state.get("tag_in", "The best thing since sliced bread.")
-tag_size     = st.session_state.get("tag_size", 65)
-tag_col      = st.session_state.get("tag_col", "#555555")
-tag_y_mm     = st.session_state.get("tag_y_mm", 50)
+    # foreground rectangle (old sliders still work)
+    if fg_bytes:
+        fg = Image.open(io.BytesIO(fg_bytes)).convert("RGBA")
+        base_w_mm, base_h_mm = 100, 140
+        w_area_mm = base_w_mm * (area_scale / 100)
+        h_area_mm = base_h_mm * (area_scale / 100)
+        anchors = {
+            "Top-left": (0, 0),
+            "Top-right": (w_mm - w_area_mm, 0),
+            "Bottom-left": (0, h_mm - h_area_mm),
+            "Bottom-right": (w_mm - w_area_mm, h_mm - h_area_mm),
+            "Centre": ((w_mm - w_area_mm) / 2, (h_mm - h_area_mm) / 2),
+        }
+        anchor_x_mm, anchor_y_mm = anchors[area_preset]
+        anchor_x_mm += nudge_x
+        anchor_y_mm += nudge_y
+        anchor_x_px = mm_to_px(anchor_x_mm)
+        anchor_y_px = mm_to_px(anchor_y_mm)
+        w_area_px = mm_to_px(w_area_mm)
+        h_area_px = mm_to_px(h_area_mm)
+        fg_sized = ImageOps.fit(fg, (w_area_px, h_area_px), centering=(0.5, 0.5))
+        shadow = add_drop_shadow(fg_sized, offset_mm=2, blur=3, opacity=40)
+        canvas.paste(shadow, (anchor_x_px - mm_to_px(2), anchor_y_px - mm_to_px(2)), shadow)
 
-info_text    = st.session_state.get("info_in", "Describe your product here.\nYou can write several sentences.")
-info_size    = st.session_state.get("info_size", 85)
-info_col     = st.session_state.get("info_col", "#333333")
-info_y_mm    = st.session_state.get("info_y_mm", 70)
-info_wrap    = st.session_state.get("info_wrap", 45)
+    # logo / signature
+    logo = DEFAULT_LOGO.resize((int(DEFAULT_LOGO.width * logo_scale / 100), int(DEFAULT_LOGO.height * logo_scale / 100)))
+    canvas.paste(logo, (mm_to_px(logo_xy[0]), mm_to_px(logo_xy[1])), logo)
+    if sig_bytes:
+        sig = Image.open(io.BytesIO(sig_bytes)).convert("RGBA")
+    else:
+        sig = DEFAULT_LOGO
+    # duplicate guard
+    if sig_bytes and hashlib.md5(sig_bytes).hexdigest() != hashlib.md5(DEFAULT_LOGO.tobytes()).hexdigest():
+        sign = sig.resize((int(sig.width * sig_scale / 100), int(sig.height * sig_scale / 100)))
+        alpha = sign.split()[-1].point(lambda p: p * 85 // 100)
+        sign.putalpha(alpha)
+        canvas.paste(sign, (mm_to_px(sig_xy[0]), mm_to_px(sig_xy[1])), sign)
 
-contact_text = st.session_state.get("contact_in", "Email: hello@example.com\nPhone: +1 234 567 890")
-contact_size = st.session_state.get("contact_size", 70)
-contact_col  = st.session_state.get("contact_col", "#444444")
-contact_y_mm = st.session_state.get("contact_y_mm", PAGE[L["page"]][1] - 30)
-contact_wrap = st.session_state.get("contact_wrap", 60)
+    # text
+    draw = ImageDraw.Draw(canvas)
+    left_px = mm_to_px(left_mm)
 
-page_img = build_preview(
-    PAGE[L["page"]],
-    bg_bytes,
-    fg_bytes,
-    sig_bytes,
-    L["preset"],
-    L["enhance"],
-    st.session_state.get("area_scale", 100),
-    st.session_state.get("area_preset", "Centre"),
-    st.session_state.get("area_nudge_x", 0),
-    st.session_state.get("area_nudge_y", 0),
-    L["logo_scale"], (L["logo_x"], L["logo_y"]),
-    L["sig_scale"], (L["sig_x"], L["sig_y"]),
-    20,
-    header_text, header_size, header_col, header_y_mm,
-    tag_text, tag_size, tag_col, tag_y_mm,
-    info_text, info_size, info_col, info_y_mm, info_wrap,
-    contact_text, contact_size, contact_col, contact_y_mm, contact_wrap,
-    L["text_format"]
-)
+    # headline
+    if auto_fit:
+        font_head, head_lines = fit_text(draw, header_txt, head_box[0], head_box[1], start_pt=200, min_pt=36, wrap_width=30)
+        y_head = mm_to_px(header_y_mm)
+        for line in head_lines:
+            w, h = font_head.getbbox(line)[2:4]
+            draw.text(((mm_to_px(w_mm) - w) // 2, y_head), line, font=font_head, fill=header_col)
+            y_head += h + 5
+    else:
+        try:
+            font_head = ImageFont.truetype("arial.ttf", header_sz)
+        except IOError:
+            font_head = ImageFont.load_default()
+        lines = textwrap.wrap(format_text(header_txt, "Title Case"), width=30)
+        y_offset = 0
+        for line in lines:
+            draw.text((left_px, mm_to_px(header_y_mm) + y_offset), line, font=font_head, fill=header_col)
+            y_offset += font_head.getbbox(line)[3] + 5
 
-st.image(page_img, use_column_width=True, caption=f"Preview – {L['page']}  {PAGE[L['page']][0]}×{PAGE[L['page']][1]} mm")
+    # tag
+    if auto_fit:
+        font_tag, tag_lines = fit_text(draw, tag_txt, tag_box[0], tag_box[1], start_pt=100, min_pt=28, wrap_width=40)
+        y_tag = mm_to_px(tag_y_mm)
+        for line in tag_lines:
+            w, h = font_tag.getbbox(line)[2:4]
+            draw.text(((mm_to_px(w_mm) - w) // 2, y_tag), line, font=font_tag, fill=tag_col)
+            y_tag += h + 5
+    else:
+        try:
+            font_tag = ImageFont.truetype("arial.ttf", tag_sz)
+        except IOError:
+            font_tag = ImageFont.load_default()
+        lines = textwrap.wrap(tag_txt, width=40)
+        y_offset = 0
+        for line in lines:
+            draw.text((left_px, mm_to_px(tag_y_mm) + y_offset), line, font=font_tag, fill=tag_col)
+            y_offset += font_tag.getbbox(line)[3] + 5
 
-# ---------------------------------------------------------
-#  EXPORT  (JPEG only – no GIF)
-# ---------------------------------------------------------
-if st.button("Generate file", key="gen_final"):
-    st.session_state.preview_generated = True
+    # info & contact (manual for brevity)
+    try:
+        font_info = ImageFont.truetype("arial.ttf", info_sz)
+    except IOError:
+        font_info = ImageFont.load_default()
+    lines = textwrap.wrap(info_txt, width=info_wrap)
+    y_offset = 0
+    for line in lines:
+        draw.text((left_px, mm_to_px(info_y_mm) + y_offset), line, font=font_info, fill=info_col)
+        y_offset += font_info.getbbox(line)[3] + 5
 
-if st.session_state.get("preview_generated", False):
-    dpi_out = L["export_dpi"]
-    scale   = dpi_out / 300.0
-    out_size = (int(page_img.width * scale), int(page_img.height * scale))
-    out_img  = page_img.resize(out_size, Image.LANCZOS)
-    buf = io.BytesIO()
-    out_img.save(buf, format="JPEG", quality=90, dpi=(dpi_out, dpi_out))
-    st.download_button("💾 Download JPEG", buf.getvalue(),
-                       file_name=f"journal_{L['page'].replace(' ','_')}_{dpi_out}dpi.jpg",
-                       mime="image/jpeg")
+    try:
+        font_contact = ImageFont.truetype("arial.ttf", contact_sz)
+    except IOError:
+        font_contact = ImageFont.load_default()
+    contact_lines = textwrap.wrap(contact_txt, width=contact_wrap)
+    y_offset = 0
+    for line in contact_lines:
+        draw.text((left_px, mm_to_px(contact_y_mm) + y_offset), line, font=font_contact, fill=contact_col)
+        y_offset += font_contact.getbbox(line)[3] + 4
+
+    return canvas.convert("RGB")
+
+@st.cache_data(show_spinner=False)
+def build_saas_preview(
+    page_mm: tuple[int, int],
+    bg_bytes: bytes | None,
+    fg_bytes: bytes | None,
+    sig_bytes: bytes | None,
+    preset_name: str,
+    enhance: bool,
+    logo_scale: int, logo_xy: tuple[int, int],
+    sig_scale: int, sig_xy: tuple[int, int],
+    header_txt: str, header_sz: int, header_col: str, header_y_mm: int,
+    price_txt: str, price_sz: int, price_col: str, price_x_mm: int, price_y_mm: int,
+    cta_txt: str, cta_sz: int, cta_col: str, cta_x_mm: int, cta_y_mm: int,
+    contact_txt: str, contact_sz: int, contact_col: str, contact_y_mm: int, contact_wrap: int,
+    prod_w_pct: int, prod_h_pct: int,
+    area_preset: str, area_scale: int, nudge_x: int, nudge_y: int,
+    text_format: str
+) -> Image.Image:
+    """SaaS layout: logo TL, headline TM, product centre block, price BL, cta BR, contact BC."""
+    w_mm, h_mm = page_mm
+    w_px, h_px = mm_to_px(w_mm), mm_to_px(h_mm)
+
+    # background (plain colour – no gradient over photo)
+    if bg_bytes:
+        bg = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
+    else:
+        bg = DEFAULT_PHOTO
+    bg = ImageOps.fit(bg, (w_px, h_px), centering=(0.5, 0.5))
+    if enhance:
+        bg = auto_enhance(bg.convert("RGB")).convert("RGBA")
+    canvas = Image.new("RGBA", (w_px, h_px), PRESETS[preset_name]["bg_col"])
+    canvas.paste(bg, (0, 0), bg)
+
+    # product image (user % + old anchor/nudge)
+    if fg_bytes:
+        prod = Image.open(io.BytesIO(fg_bytes)).convert("RGBA")
+        prod_w_px = int(w_px * prod_w_pct / 100)
+        prod_h_px = int(h_px * prod_h_pct / 100)
+        # apply old rectangle anchor + nudge for fine placement
+        base_w_mm, base_h_mm = 100, 140
+        w_area_mm = base_w_mm * (area_scale / 100)
+        h_area_mm = base_h_mm * (area_scale / 100)
+        anchors = {
+            "Top-left": (0, 0),
+            "Top-right": (w_mm - w_area_mm, 0),
+            "Bottom-left": (0, h_mm - h_area_mm),
+            "Bottom-right": (w_mm - w_area_mm, h_mm - h_area_mm),
+            "Centre": ((w_mm - w_area_mm) / 2, (h_mm - h_area_mm) / 2),
+        }
+        anchor_x_mm, anchor_y_mm = anchors[area_preset]
+        anchor_x_mm += nudge_x
+        anchor_y_mm += nudge_y
+        anchor_x_px = mm_to_px(anchor_x_mm)
+        anchor_y_px = mm_to_px(anchor_y_mm)
+        prod = ImageOps.fit(prod, (prod_w_px, prod_h_px), centering=(0.5, 0.5))
+        shadow = add_drop_shadow(prod, offset_mm=1, blur=2, opacity=30)
+        canvas.paste(shadow, (anchor_x_px, anchor_y_px), shadow)
+
+    # logo / signature (sliders still work)
+    logo = DEFAULT_LOGO.resize((int(DEFAULT_LOGO.width * logo_scale / 100), int(DEFAULT_LOGO.height * logo_scale / 100)))
+    canvas.paste(logo, (mm_to_px(logo_xy[0]), mm_to_px(logo_xy[1])), logo)
+    if sig_bytes:
+        sig = Image.open(io.BytesIO(sig_bytes)).convert("RGBA")
+    else:
+        sig = DEFAULT_LOGO
+    # duplicate guard
+    if sig_bytes and hashlib.md5(sig_bytes).hexdigest() != hashlib.md5(DEFAULT_LOGO.tobytes()).hexdigest():
+        sign = sig.resize((int(sig.width * sig_scale / 100), int(sig.height * sig_scale / 100)))
+        alpha = sign.split()[-1].point(lambda p: p * 85 // 100)
+        sign.putalpha(alpha)
+        canvas.paste(sign, (mm_to_px(sig_xy[0]), mm_to_px(sig_xy[1])), sign)
+
+    # text – SaaS sizes (but sliders still control them)
+    draw = ImageDraw.Draw(canvas)
+    try:
+        font_head   = ImageFont.truetype("arial.ttf", header_sz)
+        font_price  = ImageFont.truetype("arial.ttf", price_sz)
+        font_cta    = ImageFont.truetype("arial.ttf", cta_sz)
+        font_contact= ImageFont.truetype("arial.ttf", contact_sz)
+    except IOError:
+        font_head = font_price = font_cta = font_contact = ImageFont.load_default()
+
+    # headline top-middle (slider controls y)
+    head_lines = textwrap.wrap(format_text(header_txt, "Title Case"), width=30)
+    y_head = mm_to_px(header_y_mm)
+    for line in head_lines:
+        w, h = font_head.getbbox(line)[2:4]
+        draw.text(((w_px - w) // 2, y_head), line, font=font_head, fill=header_col)
+        y_head += h + 5
+
+    # price (slider controls x/y)
+    draw.text((mm_to_px(price_x_mm), mm_to_px(price_y_mm)),
+              format_text(price_txt, "UPPER CASE"), font=font_price, fill=price_col)
+
+    # cta (slider controls x/y)
+    cta_lines = textwrap.wrap(cta_txt, width=20)
+    for i, line in enumerate(cta_lines):
+        w, h = font_cta.getbbox(line)[2:4]
+        x = mm_to_px(cta_x_mm)
+        y = mm_to_px(cta_y_mm) + i * (h + 5)
+        draw.text((x, y), line, font=font_cta, fill=cta_col)
+
+    # contact (slider controls y, always centred)
+    contact_lines = textwrap.wrap(contact_txt, width=contact_wrap)
+    y_contact = mm_to_px(contact_y_mm)
+    for line in contact_lines:
+        w, h = font_contact.getbbox(line)[2:4]
+        draw.text(((w_px - w) // 2, y_contact), line, font=font_contact, fill=contact_col)
+        y_contact += h + 4
+
+    return canvas.convert("RGB")
