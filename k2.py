@@ -1,5 +1,6 @@
 # streamlit_app.py
 import io, os, textwrap, math, requests, streamlit as st
+import cv2
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageFilter
 from rembg import remove
 from groq import Groq
