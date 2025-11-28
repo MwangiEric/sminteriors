@@ -12,5 +12,3 @@ groq
 onnxruntime
 httpx
 opencv-python
-opencv-python-headless
-opencv-contrib-python
