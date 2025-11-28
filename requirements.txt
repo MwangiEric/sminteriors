@@ -11,7 +11,6 @@ rembg
 groq
 onnxruntime
 httpx
-libgl1
 opencv-python
 opencv-python-headless
 opencv-contrib-python
