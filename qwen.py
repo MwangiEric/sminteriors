@@ -1,248 +1,279 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
-import numpy as np
-import io
-import tempfile
-import os
-import math
 import requests
-import json
+from groq import Groq
+import os
 import re
-from moviepy.editor import ImageSequenceClip, AudioFileClip
-import groq
+from dateutil import parser
+from datetime import datetime
+import json
 
-# Configuration
-WIDTH, HEIGHT = 1080, 1920
-FPS = 30
+# ----------------------------
+# CONFIG
+# ----------------------------
+GROQ_KEY = st.secrets.get("groq_key", "")
+client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+MODEL = "llama3-1b-8192"  # Llama 3.2 1B
 
-# Your assets
-LOGO_URL = "https://ik.imagekit.io/ericmwangi/smlogo.png?updatedAt=1763071173037"
-AUDIO_URL = "https://ik.imagekit.io/ericmwangi/advertising-music-308403.mp3?updatedAt=1764101548797"
+BRAND_MAROON = "#8B0000"
+TRIPPLEK_PHONE = "+254700123456"
+TRIPPLEK_URL = "https://www.tripplek.co.ke"
 
-# Font helper (safe & modern)
-def get_font(size, bold=False):
-    candidates = []
-    if bold:
-        candidates = [
-            "Arial Bold.ttf", "Arial-Bold.ttf", "arialbd.ttf",
-            "/System/Library/Fonts/Arial Bold.ttf",
-            "DejaVuSans-Bold.ttf", "segoeui_bold.ttf"
-        ]
-    else:
-        candidates = ["Arial.ttf", "arial.ttf", "DejaVuSans.ttf"]
-    for candidate in candidates:
+st.set_page_config(page_title="📱 Tripple K Phone Specs & Ads", layout="centered")
+
+st.markdown(f"""
+<style>
+h1, h2, h3 {{ color: {BRAND_MAROON} !important; }}
+.stButton>button {{
+    background-color: {BRAND_MAROON};
+    color: white;
+    font-weight: bold;
+    border-radius: 8px;
+    margin-top: 0.3rem;
+}}
+.copy-btn {{
+    background: #4CAF50; color: white; border: none; padding: 6px 12px;
+    border-radius: 4px; cursor: pointer; font-size: 0.9rem;
+    margin-top: 5px;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------------
+# SAFE API CALLS (with caching)
+# ----------------------------
+@st.cache_data(ttl=3600)  # Cache GSM results for 1 hour
+def safe_api_call(url: str):
+    try:
+        res = requests.get(url, timeout=12)
+        if res.status_code != 200:
+            return None, f"HTTP {res.status_code}"
+        # Safely parse JSON
         try:
-            return ImageFont.truetype(candidate, size)
-        except:
-            continue
-    return ImageFont.load_default()
-
-# Groq client
-@st.cache_resource
-def get_groq_client():
-    if 'groq_key' not in st.secrets:
-        st.error("❌ Add 'groq_key' to Streamlit Secrets")
-        return None
-    return groq.Client(api_key=st.secrets['groq_key'])
-
-# Load assets
-@st.cache_resource
-def load_logo():
-    try:
-        resp = requests.get(LOGO_URL, timeout=10)
-        if resp.status_code == 200:
-            logo = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-            return logo.resize((260, 130), Image.LANCZOS)
+            return res.json(), None
+        except ValueError:
+            return None, "Invalid response (not JSON)"
     except Exception as e:
-        st.warning(f"Logo fallback: {e}")
-    fallback = Image.new("RGBA", (260, 130), (0,0,0,0))
-    draw = ImageDraw.Draw(fallback)
-    font = get_font(70, bold=True)
-    draw.text((10, 25), "SM", fill="#FFD700", font=font)
-    return fallback
+        return None, f"Network error: {str(e)}"
 
-@st.cache_resource
-def download_audio():
+@st.cache_data(ttl=7200)  # Cache Groq output for 2 hours
+def cached_groq_generate(prompt: str):
+    if not client:
+        return "Groq API key missing. Set `groq_key` in secrets."
     try:
-        resp = requests.get(AUDIO_URL, timeout=15)
-        if resp.status_code == 200:
-            path = os.path.join(tempfile.gettempdir(), "sm_bg_music.mp3")
-            with open(path, "wb") as f:
-                f.write(resp.content)
-            return path
-    except Exception as e:
-        st.warning(f"Audio download failed: {e}")
-    return None
-
-# AI Content Generator
-def generate_diy_content(client):
-    prompt = """
-    You are a luxury interior design expert for "SM Interiors". Generate a high-value DIY tip for social media.
-
-    Requirements:
-    - Title: MAX 4 WORDS, catchy, uppercase-style
-    - Tip: Practical, 15-30 words, actionable
-    - Caption: Engaging, includes emoji, under 120 chars
-    - Hashtags: 8-12 relevant hashtags starting with #
-
-    Respond ONLY with valid JSON:
-    {
-        "title": "WOOD POLISH HACK",
-        "tip": "Mix 1 part white vinegar with 2 parts olive oil. Apply with a soft cloth in circular motions for instant shine.",
-        "caption": "Revive dull wood in seconds! ✨ #DIY",
-        "hashtags": "#DIY #WoodCare #HomeDecor #InteriorDesign #SMInteriors #FurnitureHack #NaturalClean #LuxuryHome"
-    }
-    """
-    try:
-        chat_completion = client.chat.completions.create(
+        chat = client.chat.completions.create(
+            model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-8b-instant",
             temperature=0.85,
-            max_tokens=400
+            max_tokens=550,
+            timeout=30
         )
-        response = chat_completion.choices[0].message.content
-        # Extract JSON robustly
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group())
-            # Clean hashtags
-            tags = re.findall(r'#\w+', data.get("hashtags", ""))
-            data["hashtags"] = " ".join(tags[:12])
-            return data
+        return chat.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"AI error: {e}")
-    # Fallback
+        return f"⚠️ Groq failed: {str(e)}"
+
+# ----------------------------
+# HELPERS
+# ----------------------------
+def time_since_release(status: str) -> str:
+    try:
+        clean = status.replace("Released ", "").strip()
+        date = parser.parse(clean)
+        days = (datetime.now() - date).days
+        if days < 0: return "Not released"
+        if days < 7: return f"{days} day{'s' if days != 1 else ''} in market"
+        if days < 30: return f"{days//7} week{'s' if days//7 != 1 else ''} in market"
+        if days < 365: return f"{days//30} month{'s' if days//30 != 1 else ''} in market"
+        return f"{days//365} year{'s' if days//365 != 1 else ''} in market"
+    except:
+        return "Unknown"
+
+def parse_specs(raw):
+    ram = storage = "N/A"
+    for mem in raw.get("memory", []):
+        if mem.get("label") == "internal":
+            val = mem.get("value", "")
+            ram_match = re.search(r"(\d+GB)\s+RAM", val)
+            storage_match = re.search(r"(\d+GB)(?!\s+RAM)", val)
+            if ram_match: ram = ram_match.group(1)
+            if storage_match: storage = storage_match.group(1)
+
     return {
-        "title": "WOOD POLISH HACK",
-        "tip": "Mix 1 part white vinegar with 2 parts olive oil. Apply with a soft cloth in circular motions for instant shine.",
-        "caption": "Revive dull wood in seconds! ✨ #DIY",
-        "hashtags": "#DIY #WoodCare #HomeDecor #InteriorDesign #SMInteriors #FurnitureHack #NaturalClean #LuxuryHome"
+        "name": raw["name"],
+        "cover": (raw.get("image") or raw.get("cover", "")).strip(),
+        "screen": f"{raw['display']['size']} ({raw['display']['resolution']})",
+        "ram": ram,
+        "storage": storage,
+        "battery": raw["battery"]["battType"],
+        "chipset": raw["platform"]["chipset"],
+        "camera": raw["mainCamera"]["mainModules"],
+        "os": raw["platform"]["os"],
+        "launched": raw.get("launced", {}),
+        "raw": raw
     }
 
-# Geometric Background
-def create_geometric_background():
-    bg = Image.new("RGB", (WIDTH, HEIGHT), "#0A0703")
-    draw = ImageDraw.Draw(bg)
-    # Gold accents
-    draw.rectangle([180, 280, 420, 480], outline="#FFD700", width=3)
-    draw.ellipse([650, 380, 980, 710], outline="#FFD700", width=3)
-    draw.polygon([(150, 1150), (420, 1150), (285, 1400)], outline="#FFD700", width=3)
-    # Subtle grid
-    for x in range(0, WIDTH, 250):
-        draw.line([(x, 0), (x, HEIGHT)], fill="#151008", width=1)
-    return bg
+def copy_button(text: str, label: str = "📋 Copy"):
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("`", "\\`")
+    )
+    st.markdown(f"""
+    <button class="copy-btn" onclick='navigator.clipboard.writeText("{escaped}")'>{label}</button>
+    """, unsafe_allow_html=True)
 
-# Text splitting
-def split_text(text, max_len=28):
-    words = text.split()
-    lines = []
-    current = []
-    for word in words:
-        test = ' '.join(current + [word])
-        if len(test) <= max_len:
-            current.append(word)
+# ----------------------------
+# UI
+# ----------------------------
+st.title("📱 Tripple K Phone Specs & Ad Generator")
+st.caption("Get specs → Generate & copy social posts for Tripple K")
+
+phone_query = st.text_input("🔍 Search a phone (e.g., Tecno Spark 20)", "")
+
+if st.button("Get Phones"):
+    if not phone_query.strip():
+        st.error("Please enter a phone name")
+    else:
+        url = f"https://tkphsp2.vercel.app/gsm/search?q={requests.utils.quote(phone_query)}"
+        results, err = safe_api_call(url)
+        if err or not results:
+            # Fallback to azharimm v2
+            st.warning("Your Vercel API is rate-limited. Using public backup...")
+            url2 = f"https://api-mobilespecs.azharimm.dev/v2/search?query={requests.utils.quote(phone_query)}"
+            results, err = safe_api_call(url2)
+        if err or not results:
+            st.error(f"❌ Failed to fetch: {err or 'No results'}")
         else:
-            if current:
-                lines.append(' '.join(current))
-            current = [word]
-    if current:
-        lines.append(' '.join(current))
-    return lines
+            st.session_state["search_results"] = results
 
-# Frame generator
-def create_frame(t, lines, title, logo=None):
-    bg = create_geometric_background()
-    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    draw = ImageDraw.Draw(overlay)
-    
-    title_font = get_font(80, bold=True)
-    text_font = get_font(66, bold=True)
-    cta_font = get_font(50, bold=True)
-    
-    # Title: lower to avoid logo (logo is top-left)
-    title_y = 220 + int(15 * math.sin(t * 1.5))
-    draw.text((80, title_y), title, fill="#FFD700", font=title_font)
-    
-    # Logo: top-left, below title
-    if logo:
-        overlay.paste(logo, (60, 60), logo)  # LEFT-aligned
-    
-    # Animated tip lines
-    base_y = 620
-    line_height = 105
-    for i, line in enumerate(lines):
-        progress = max(0, min(1, (t - i * 0.35) * 2.2))
-        if progress <= 0:
-            continue
-        offset_y = int((1 - progress) * 50)
-        alpha = int(255 * progress)
-        y = base_y + i * line_height - offset_y
-        # Shadow + text
-        draw.text((WIDTH//2 + 3, y + 3), line, fill=(0,0,0, alpha), font=text_font, anchor="mm")
-        draw.text((WIDTH//2, y), line, fill=(255,255,255, alpha), font=text_font, anchor="mm")
-    
-    # CTA
-    cta_text = "👉 SWIPE UP FOR MORE!"
-    cta_alpha = int(180 + 70 * math.sin(t * 3.5))
-    draw.text((WIDTH//2, HEIGHT - 150), cta_text, fill=(255,255,255, cta_alpha), font=cta_font, anchor="mm")
-    
-    bg.paste(overlay, (0,0), overlay)
-    return np.array(bg)
+# Phone selection
+if "search_results" in st.session_state:
+    names = [r["name"] for r in st.session_state["search_results"]]
+    selected_name = st.selectbox("Select phone:", names, index=0)
+    selected = next(r for r in st.session_state["search_results"] if r["name"] == selected_name)
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="SM Interiors AI Video", layout="wide", page_icon="💡")
-st.title("💡 SM Interiors AI DIY Video")
-st.caption("AI-generated • Your logo on left • Geometric design • Your music")
+    # Fetch full specs
+    details_url = f"https://tkphsp2.vercel.app/gsm/info/{selected['id']}"
+    details, err = safe_api_call(details_url)
+    if err or not details:
+        st.warning("Falling back to public specs API...")
+        # Try azharimm v2 detail (note: structure differs slightly)
+        search_again = safe_api_call(f"https://api-mobilespecs.azharimm.dev/v2/search?query={requests.utils.quote(selected_name)}")[0]
+        if search_again and len(search_again) > 0:
+            slug = search_again[0]["slug"]
+            details, err = safe_api_call(f"https://api-mobilespecs.azharimm.dev/{slug}")
+    if err or not details:
+        st.error(f"Could not load full specs: {err}")
+        st.stop()
 
-client = get_groq_client()
+    clean = parse_specs(details)
+    st.session_state["current_phone"] = clean
 
-if client and st.button("✨ Generate & Create Video", type="primary"):
-    with st.spinner("AI is crafting your DIY tip..."):
-        content = generate_diy_content(client)
-        tip_lines = split_text(content["tip"])
-        duration = min(12, max(6, len(content["tip"].split()) // 2 + 4))
-    
-    st.subheader("📱 AI-Generated Content")
-    col1, col2 = st.columns(2)
+    # Display
+    st.markdown(f'<h1 style="color:{BRAND_MAROON};">{clean["name"]}</h1>', unsafe_allow_html=True)
+    launched = clean["launched"]
+    announced = launched.get("announced", "N/A")
+    status = launched.get("status", "N/A")
+    market_duration = time_since_release(status) if "Released" in status else "Not released"
+    st.caption(f"Announced: {announced} | {market_duration}")
+
+    col1, col2 = st.columns([1, 1.5])
     with col1:
-        st.text_area("Caption", content["caption"], height=80)
-    with col2:
-        st.text_area("Hashtags", content["hashtags"], height=80)
-    
-    with st.spinner("Rendering video..."):
-        logo = load_logo()
-        audio_path = download_audio()
-        frames = []
-        for i in range(FPS * duration):
-            t = i / FPS
-            frame = create_frame(t, tip_lines, content["title"], logo)
-            frames.append(frame)
-        
-        clip = ImageSequenceClip(frames, fps=FPS)
-        if audio_path and os.path.exists(audio_path):
+        img_url = clean["cover"]
+        if img_url:
+            st.image(img_url, use_container_width=True)
             try:
-                audio = AudioFileClip(audio_path).subclip(0, min(duration, AudioFileClip(audio_path).duration))
-                clip = clip.set_audio(audio)
-            except Exception as e:
-                st.warning(f"Audio skipped: {e}")
-        
-        out_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-        try:
-            clip.write_videofile(out_path, fps=FPS, codec="libx264", audio_codec="aac", preset="fast", logger=None)
-            st.success("✅ Video ready!")
-            st.video(out_path)
-            with open(out_path, "rb") as f:
-                st.download_button("⬇️ Download Video", f, "SM_DIY_Geometric.mp4", "video/mp4", use_container_width=True)
-        except Exception as e:
-            st.error(f"Video encoding failed: {e}")
-        finally:
-            clip.close()
-            if 'audio' in locals():
-                audio.close()
-            if os.path.exists(out_path):
-                os.unlink(out_path)
-            if audio_path and os.path.exists(audio_path):
-                os.unlink(audio_path)
+                img_data = requests.get(img_url, timeout=10).content
+                st.download_button("💾 Download Image", img_data, f"{clean['name']}.jpg")
+            except:
+                st.caption("Image download unavailable")
+    with col2:
+        spec_lines = [
+            f"🖥️ **Screen**: {clean['screen']}",
+            f"🧠 **RAM**: {clean['ram']}",
+            f"💾 **Storage**: {clean['storage']}",
+            f"🔋 **Battery**: {clean['battery']}",
+            f"⚙️ **Chip**: {clean['chipset']}",
+            f"📸 **Camera**: {clean['camera']}",
+            f"🪟 **OS**: {clean['os']}"
+        ]
+        spec_text = "\n".join(spec_lines)
+        st.markdown(spec_text)
+        st.code(spec_text, language="text")
 
-else:
-    st.info("➡️ Click the button to generate an AI-powered DIY video with your branding.")
+    # Groq section
+    if client:
+        st.divider()
+        st.subheader("📣 Generate Social Posts")
+
+        persona = st.selectbox(
+            "🎯 Target Persona",
+            ["All Kenyan buyers", "Budget students", "Tech-savvy professionals", "Camera creators", "Business executives"],
+            index=0
+        )
+        tone = st.selectbox("🎨 Brand Tone", ["Playful", "Rational", "Luxury", "FOMO"], index=0)
+
+        if st.button("✨ Generate with Groq"):
+            phone_data = clean
+            prompt = f"""
+You are the marketing AI for Tripple K Communications (www.tripplek.co.ke).
+
+PHONE: {phone_data['name']}
+PERSONA: {persona}
+TONE: {tone}
+
+FULL SPECS:
+{json.dumps(phone_data['raw'], indent=2)}
+
+TRIPPLE K VALUE PROPS (must mention at least 2):
+- Accredited distributor → 100% genuine phones
+- Official manufacturer warranty
+- Pay on delivery
+- Fast Nairobi delivery
+- Call {TRIPPLEK_PHONE} or visit {TRIPPLEK_URL}
+
+Generate platform-specific posts in this exact format:
+
+TikTok: [1 fun line <120 chars]
+WhatsApp: [2-3 lines. Include phone number, warranty, delivery]
+Facebook: [3-4 engaging sentences]
+Instagram: [2-3 stylish lines]
+Hashtags: #TrippleK #TrippleKKE #PhoneDealsKE
+            """
+            with st.spinner("Generating with Groq (cached for 2h)..."):
+                ad_copy = cached_groq_generate(prompt)
+                st.session_state["social_copy"] = ad_copy
+
+    # Display with copy buttons
+    if "social_copy" in st.session_state:
+        st.divider()
+        st.subheader("📤 Copy to Social Media")
+        raw = st.session_state["social_copy"]
+        if raw.startswith("⚠️") or "Groq failed" in raw or "missing" in raw:
+            st.error(raw)
+        else:
+            # Parse
+            posts = {"TikTok": "", "WhatsApp": "", "Facebook": "", "Instagram": "", "Hashtags": ""}
+            lines = [l.strip() for l in raw.splitlines() if l.strip()]
+            current = None
+            for line in lines:
+                if line.startswith("TikTok:"):
+                    current, posts["TikTok"] = "TikTok", line.replace("TikTok:", "").strip()
+                elif line.startswith("WhatsApp:"):
+                    current, posts["WhatsApp"] = "WhatsApp", line.replace("WhatsApp:", "").strip()
+                elif line.startswith("Facebook:"):
+                    current, posts["Facebook"] = "Facebook", line.replace("Facebook:", "").strip()
+                elif line.startswith("Instagram:"):
+                    current, posts["Instagram"] = "Instagram", line.replace("Instagram:", "").strip()
+                elif line.startswith("Hashtags:"):
+                    current, posts["Hashtags"] = "Hashtags", line.replace("Hashtags:", "").strip()
+                elif current:
+                    posts[current] += " " + line
+
+            for plat, text in posts.items():
+                if text:
+                    st.text_area(f"{plat}", text, height=80, key=f"ta_{plat}")
+                    copy_button(text, f"📋 Copy {plat}")
+
+st.divider()
+st.caption(f"© Tripple K Communications | {TRIPPLEK_URL}")
