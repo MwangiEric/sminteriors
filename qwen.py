@@ -12,7 +12,7 @@ import json
 # ----------------------------
 GROQ_KEY = st.secrets.get("groq_key", "")
 client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
-MODEL = "llama3-1b-8192"  # Llama 3.2 1B
+MODEL = "llama3-1b-8192"
 
 BRAND_MAROON = "#8B0000"
 TRIPPLEK_PHONE = "+254700123456"
@@ -39,37 +39,51 @@ h1, h2, h3 {{ color: {BRAND_MAROON} !important; }}
 """, unsafe_allow_html=True)
 
 # ----------------------------
+# PROMPT BUILDER (separate function)
+# ----------------------------
+def build_groq_prompt(phone_dict: dict, persona: str, tone: str) -> str:
+    return f"""
+You are the marketing AI for Tripple K Communications (www.tripplek.co.ke).
+
+PHONE: {phone_dict['name']}
+PERSONA: {persona}
+TONE: {tone}
+
+FULL SPECS:
+{json.dumps(phone_dict['raw'], indent=2)}
+
+TRIPPLE K VALUE PROPS (must mention at least 2):
+- Accredited distributor → 100% genuine phones
+- Official manufacturer warranty
+- Pay on delivery
+- Fast Nairobi delivery
+- Call {TRIPPLEK_PHONE} or visit {TRIPPLEK_URL}
+
+Generate platform-specific posts in this exact format:
+
+TikTok: [1 fun line <120 chars]
+WhatsApp: [2-3 lines. Include phone number, warranty, delivery]
+Facebook: [3-4 engaging sentences]
+Instagram: [2-3 stylish lines]
+Hashtags: #TrippleK #TrippleKKE #PhoneDealsKE
+    """.strip()
+
+# ----------------------------
 # SAFE API CALLS (with caching)
 # ----------------------------
-@st.cache_data(ttl=3600)  # Cache GSM results for 1 hour
+@st.cache_data(ttl=3600)
 def safe_api_call(url: str):
     try:
         res = requests.get(url, timeout=12)
         if res.status_code != 200:
-            return None, f"HTTP {res.status_code}"
-        # Safely parse JSON
-        try:
-            return res.json(), None
-        except ValueError:
-            return None, "Invalid response (not JSON)"
-    except Exception as e:
+            return None, f"HTTP {res.status_code} from server"
+        return res.json(), None
+    except requests.exceptions.Timeout:
+        return None, "Request timed out (server slow)"
+    except requests.exceptions.RequestException as e:
         return None, f"Network error: {str(e)}"
-
-@st.cache_data(ttl=7200)  # Cache Groq output for 2 hours
-def cached_groq_generate(prompt: str):
-    if not client:
-        return "Groq API key missing. Set `groq_key` in secrets."
-    try:
-        chat = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.85,
-            max_tokens=550,
-            timeout=30
-        )
-        return chat.choices[0].message.content.strip()
-    except Exception as e:
-        return f"⚠️ Groq failed: {str(e)}"
+    except ValueError:
+        return None, "Invalid response (not JSON – possibly blocked or rate-limited)"
 
 # ----------------------------
 # HELPERS
@@ -123,7 +137,7 @@ def copy_button(text: str, label: str = "📋 Copy"):
     """, unsafe_allow_html=True)
 
 # ----------------------------
-# UI
+# MAIN UI
 # ----------------------------
 st.title("📱 Tripple K Phone Specs & Ad Generator")
 st.caption("Get specs → Generate & copy social posts for Tripple K")
@@ -132,17 +146,23 @@ phone_query = st.text_input("🔍 Search a phone (e.g., Tecno Spark 20)", "")
 
 if st.button("Get Phones"):
     if not phone_query.strip():
-        st.error("Please enter a phone name")
-    else:
-        url = f"https://tkphsp2.vercel.app/gsm/search?q={requests.utils.quote(phone_query)}"
-        results, err = safe_api_call(url)
+        st.error("❌ Please enter a phone name")
+        st.stop()
+
+    with st.spinner("🔍 Searching phones..."):
+        # Try primary Vercel API
+        url1 = f"https://tkphsp2.vercel.app/gsm/search?q={requests.utils.quote(phone_query)}"
+        results, err = safe_api_call(url1)
+        
+        # Fallback to azharimm v2 if needed
         if err or not results:
-            # Fallback to azharimm v2
-            st.warning("Your Vercel API is rate-limited. Using public backup...")
+            st.warning("⚠️ Primary API rate-limited. Trying public backup...")
             url2 = f"https://api-mobilespecs.azharimm.dev/v2/search?query={requests.utils.quote(phone_query)}"
             results, err = safe_api_call(url2)
+
         if err or not results:
-            st.error(f"❌ Failed to fetch: {err or 'No results'}")
+            st.error(f"❌ Failed to find phone: {err or 'No results'}")
+            st.stop()
         else:
             st.session_state["search_results"] = results
 
@@ -153,21 +173,23 @@ if "search_results" in st.session_state:
     selected = next(r for r in st.session_state["search_results"] if r["name"] == selected_name)
 
     # Fetch full specs
-    details_url = f"https://tkphsp2.vercel.app/gsm/info/{selected['id']}"
-    details, err = safe_api_call(details_url)
-    if err or not details:
-        st.warning("Falling back to public specs API...")
-        # Try azharimm v2 detail (note: structure differs slightly)
-        search_again = safe_api_call(f"https://api-mobilespecs.azharimm.dev/v2/search?query={requests.utils.quote(selected_name)}")[0]
-        if search_again and len(search_again) > 0:
-            slug = search_again[0]["slug"]
-            details, err = safe_api_call(f"https://api-mobilespecs.azharimm.dev/{slug}")
-    if err or not details:
-        st.error(f"Could not load full specs: {err}")
-        st.stop()
+    with st.spinner("📱 Loading full specs..."):
+        details_url = f"https://tkphsp2.vercel.app/gsm/info/{selected['id']}"
+        details, err = safe_api_call(details_url)
+        if err or not details:
+            # Fallback to azharimm v2 detail
+            st.warning("⚠️ Falling back to public specs API...")
+            search_res, _ = safe_api_call(f"https://api-mobilespecs.azharimm.dev/v2/search?query={requests.utils.quote(selected_name)}")
+            if search_res and len(search_res) > 0:
+                slug = search_res[0]["slug"]
+                details, err = safe_api_call(f"https://api-mobilespecs.azharimm.dev/{slug}")
+        if err or not details:
+            st.error(f"❌ Could not load specs: {err}")
+            st.stop()
 
     clean = parse_specs(details)
     st.session_state["current_phone"] = clean
+    cover_url = clean["cover"]
 
     # Display
     st.markdown(f'<h1 style="color:{BRAND_MAROON};">{clean["name"]}</h1>', unsafe_allow_html=True)
@@ -179,14 +201,13 @@ if "search_results" in st.session_state:
 
     col1, col2 = st.columns([1, 1.5])
     with col1:
-        img_url = clean["cover"]
-        if img_url:
-            st.image(img_url, use_container_width=True)
+        if cover_url:
+            st.image(cover_url, use_container_width=True)
             try:
-                img_data = requests.get(img_url, timeout=10).content
+                img_data = requests.get(cover_url, timeout=10).content
                 st.download_button("💾 Download Image", img_data, f"{clean['name']}.jpg")
-            except:
-                st.caption("Image download unavailable")
+            except Exception as e:
+                st.caption("⚠️ Image download failed")
     with col2:
         spec_lines = [
             f"🖥️ **Screen**: {clean['screen']}",
@@ -201,7 +222,7 @@ if "search_results" in st.session_state:
         st.markdown(spec_text)
         st.code(spec_text, language="text")
 
-    # Groq section
+    # Groq generation
     if client:
         st.divider()
         st.subheader("📣 Generate Social Posts")
@@ -213,46 +234,31 @@ if "search_results" in st.session_state:
         )
         tone = st.selectbox("🎨 Brand Tone", ["Playful", "Rational", "Luxury", "FOMO"], index=0)
 
-        if st.button("✨ Generate with Groq"):
-            phone_data = clean
-            prompt = f"""
-You are the marketing AI for Tripple K Communications (www.tripplek.co.ke).
-
-PHONE: {phone_data['name']}
-PERSONA: {persona}
-TONE: {tone}
-
-FULL SPECS:
-{json.dumps(phone_data['raw'], indent=2)}
-
-TRIPPLE K VALUE PROPS (must mention at least 2):
-- Accredited distributor → 100% genuine phones
-- Official manufacturer warranty
-- Pay on delivery
-- Fast Nairobi delivery
-- Call {TRIPPLEK_PHONE} or visit {TRIPPLEK_URL}
-
-Generate platform-specific posts in this exact format:
-
-TikTok: [1 fun line <120 chars]
-WhatsApp: [2-3 lines. Include phone number, warranty, delivery]
-Facebook: [3-4 engaging sentences]
-Instagram: [2-3 stylish lines]
-Hashtags: #TrippleK #TrippleKKE #PhoneDealsKE
-            """
-            with st.spinner("Generating with Groq (cached for 2h)..."):
-                ad_copy = cached_groq_generate(prompt)
-                st.session_state["social_copy"] = ad_copy
+        if st.button("✨ Generate with Groq (Llama 3.2 1B)"):
+            phone_data = clean  # ✅ Now safely in scope
+            with st.spinner("🧠 Generating AI posts (cached for 2h)..."):
+                prompt = build_groq_prompt(phone_data, persona, tone)
+                try:
+                    chat = client.chat.completions.create(
+                        model=MODEL,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.85,
+                        max_tokens=550,
+                        timeout=30
+                    )
+                    ad_copy = chat.choices[0].message.content.strip()
+                    st.session_state["social_copy"] = ad_copy
+                except Exception as e:
+                    st.session_state["social_copy"] = f"❌ Groq error: {str(e)}"
 
     # Display with copy buttons
     if "social_copy" in st.session_state:
         st.divider()
         st.subheader("📤 Copy to Social Media")
         raw = st.session_state["social_copy"]
-        if raw.startswith("⚠️") or "Groq failed" in raw or "missing" in raw:
+        if raw.startswith("❌"):
             st.error(raw)
         else:
-            # Parse
             posts = {"TikTok": "", "WhatsApp": "", "Facebook": "", "Instagram": "", "Hashtags": ""}
             lines = [l.strip() for l in raw.splitlines() if l.strip()]
             current = None
