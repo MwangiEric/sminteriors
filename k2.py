@@ -1,257 +1,150 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance, ImageFilter
-from groq import Groq
-import io
+from moviepy.editor import *
+from PIL import Image
 import os
-import textwrap
+import io
 import requests
+from io import BytesIO
+import numpy as np
+from tempfile import NamedTemporaryFile
 
-# ---------------------------------------------------------
-#  1.  DIAGNOSTICS:  always show traceback
-# ---------------------------------------------------------
-import traceback, sys
-try:
+# Your assets
+LOGO_URL = "https://ik.imagekit.io/ericmwangi/c&h.png?updatedAt=1761860288449"
+WHATSAPP_ICON_URL = "https://ik.imagekit.io/ericmwangi/whatsapp.png?updatedAt=1765797099945"
+TIKTOK_ICON_URL = "https://ik.imagekit.io/ericmwangi/tiktok.png?updatedAt=1765799624640"
+MUSIC_URL = "https://ik.imagekit.io/ericmwangi/advertising-music-308403.mp3?updatedAt=1764101548797"  # Your track!
 
-    st.set_page_config(page_title="Social Media Post Generator", layout="wide")
+@st.cache_data
+def download_image(url):
+    response = requests.get(url)
+    return Image.open(BytesIO(response.content))
 
-    # ---------------------------------------------------------
-    #  2.  LIVE LOG  (appears in Cloud logs + browser)
-    # ---------------------------------------------------------
-    def log(msg):
-        st.write(f"🔍  {msg}")      # browser
-        print(msg)                # Cloud console
+@st.cache_data
+def download_music(url):
+    response = requests.get(url)
+    temp_file = NamedTemporaryFile(delete=False, suffix=".mp3")
+    temp_file.write(response.content)
+    temp_file.close()
+    return temp_file.name
 
-    log("----  app start  ----")
+logo_img = download_image(LOGO_URL)
+whatsapp_img = download_image(WHATSAPP_ICON_URL)
+tiktok_img = download_image(TIKTOK_ICON_URL)
 
-    # ---------------------------------------------------------
-    #  3.  SOLID BROWN BACKGROUND  (no CSS, no flashes)
-    # ---------------------------------------------------------
-    BACKGROUND_COLOUR = "#8B4513"   # saddle-brown – change here
-    PAGE_MM = (210, 297)            # A4 portrait
-    DPI     = 300
-    MM_TO_PX = DPI / 25.4
-    def mm_to_px(mm: float) -> int:
-        return int(mm * MM_TO_PX)
+# App UI
+st.set_page_config(page_title="Car & Homes Hub Ads", layout="centered")
+st.title("🚗 Car & Homes Hub - Video Ad Generator")
+st.markdown("**Upload photos → Instant 10s ad with upbeat music & strong CTA**")
 
-    # ---------------------------------------------------------
-    #  4.  SAFE OPEN + RESIZE  (max 5 MB pixel buffer)
-    # ---------------------------------------------------------
-    MAX_PIXELS = 5_000_000   # ~ 5 MB RGBA
+# Inputs
+col1, col2 = st.columns(2)
+with col1:
+    model = st.text_input("Car Model", "Subaru XV")
+    price = st.text_input("Price", "KSh 3,800,000")
+    location = st.text_input("Location", "Westlands, Nairobi")
+with col2:
+    phone = st.text_input("Phone / WhatsApp", "+254 700 000 000")
+    cta_text = st.text_input("Call to Action", "Visit Us Today!")
 
-    def safe_open(upload, name: str) -> Image.Image:
-        if not upload:
-            log(f"{name}: none → solid brown fallback")
-            return Image.new("RGBA", (600, 900), BACKGROUND_COLOUR)
-        if upload.size > 20 * 1024 * 1024:
-            st.error(f"{name} must be < 20 MB")
-            st.stop()
-        try:
-            img = Image.open(io.BytesIO(upload.read())).convert("RGBA")
-            log(f"{name} original {img.size}  mode={img.mode}")
-            if img.width * img.height > MAX_PIXELS:
-                ratio = (MAX_PIXELS / (img.width * img.height)) ** 0.5
-                new_size = (int(img.width * ratio), int(img.height * ratio))
-                img = img.resize(new_size, Image.LANCZOS)
-                log(f"{name} resized → {img.size}")
-            return img
-        except Exception as e:
-            log(f"{name} open failed: {e}")
-            st.error(f"{name} is corrupted or not an image")
-            st.stop()
+specs = st.text_area("Key Specs (one per line)", 
+    "2.0L Boxer Engine\nSymmetrical AWD\nEyeSight Safety\nPremium Interior\nApple CarPlay")
 
-    # ---------------------------------------------------------
-    #  5.  GROQ API SETUP
-    # ---------------------------------------------------------
-    try:
-        groq_api_key = st.secrets["groq_key"]
-        groq = Groq(api_key=groq_api_key)
-    except KeyError:
-        st.error("Groq API key not found. Please set it in Streamlit secrets.")
-        groq = None
+uploaded_files = st.file_uploader("Upload 3-4 car photos (front • interior • rear • side)", 
+                                  type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-    def generate_text_from_image(image):
-        if groq is None:
-            return "Groq API key not configured."
+if uploaded_files and len(uploaded_files) >= 3:
+    st.success("Photos loaded – ready to generate!")
+    cols = st.columns(4)
+    for i in range(min(4, len(uploaded_files))):
+        cols[i].image(uploaded_files[i], use_column_width=True)
 
-        try:
-            # Convert image to bytes
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG')
-            img_byte_arr = img_byte_arr.getvalue()
-
-            # Create a simple prompt (you may need to refine this)
-            prompt = f"Describe this product image in a way that would be used in a social media post. Focus on the product's features, benefits, and style."
-
-            # Call Groq API (replace with the appropriate API call)
-            chat_completion = groq.chat.completions.create(
-                model="mixtral-8x7b-32768",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1024,
-                temperature=0.7,
-                top_p=1,
-                n=1,
-                stream=False,
-            )
-
-            ai_text = chat_completion.choices[0].message.content
-            return ai_text
-
-        except Exception as e:
-            return f"Error generating text: {e}"
-
-    # ---------------------------------------------------------
-    #  6.  UPLOADS  (re-open every run – no EOF)
-    # ---------------------------------------------------------
-    bg_file = st.file_uploader("Background (jpg/png) – optional", type=["jpg", "jpeg", "png"])
-    bg_img  = safe_open(bg_file, "bg")
-
-    # Multiple Product Image Upload
-    uploaded_files = st.file_uploader("Upload Multiple Product Images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-
-    images = []
-    if uploaded_files:
-        for uploaded_file in uploaded_files:
-            try:
-                image = Image.open(uploaded_file)
-                images.append(image)
-                st.image(image, caption=uploaded_file.name, width=150)  # Display thumbnails
-            except Exception as e:
-                st.error(f"Error processing {uploaded_file.name}: {e}")
-
-        st.write(f"Number of images uploaded: {len(images)}")
+if st.button("🎬 Generate Ad with Upbeat Music", type="primary"):
+    if len(uploaded_files) < 3:
+        st.error("Upload at least 3 photos")
     else:
-        st.info("Please upload some product images.")
+        with st.spinner("Downloading music & generating ad..."):
+            # Images
+            temp_images = []
+            for i in range(min(4, len(uploaded_files))):
+                path = f"temp_{i}.jpg"
+                Image.open(uploaded_files[i]).save(path)
+                temp_images.append(path)
+            while len(temp_images) < 4:
+                temp_images.append(temp_images[-1])
 
-    sig_file = st.file_uploader("Signature PNG – optional", type=["png"])
-    sig_img = safe_open(sig_file, "sig")
+            # Download music
+            music_path = download_music(MUSIC_URL)
 
-    # ---------------------------------------------------------
-    #  7.  LAYOUT OPTIONS IN SIDEBAR
-    # ---------------------------------------------------------
-    st.sidebar.header("Layout Options")
+            # Video setup
+            size = (1080, 1920)
+            duration = 10
+            fps = 30
 
-    # Page Size
-    page_size = st.sidebar.selectbox("Page Size", ["A4", "Letter"], index=0)
-    if page_size == "A4":
-        PAGE_MM = (210, 297)
-    elif page_size == "Letter":
-        PAGE_MM = (215.9, 279.4)
+            # Pan & zoom slides
+            clips = []
+            durations = [3.2, 3.0, 2.0, 1.8]
+            zooms = [[1.0, 1.4], [1.05, 1.35], [1.0, 1.3], [1.1, 1.15]]
+            pans = [["center", "center"], ["center", "left"], ["center", "top"], ["right", "center"]]
 
-    # Product Image Size and Position
-    st.sidebar.subheader("Product Image")
-    product_width_percent = st.sidebar.slider("Width (%)", 10, 90, 70)
-    product_height_percent = st.sidebar.slider("Height (%)", 10, 90, 40)
-    product_x_offset = st.sidebar.number_input("X Offset", -200, 200, 0)
-    product_y_offset = st.sidebar.number_input("Y Offset", -200, 200, 0)
+            current_time = 0
+            for i in range(4):
+                clip = ImageClip(temp_images[i]).set_duration(durations[i]).set_start(current_time)
+                clip = clip.resize(height=size[1] * max(zooms[i]))
+                clip = clip.resize(lambda t: zooms[i][0] + (zooms[i][1] - zooms[i][0]) * (t / durations[i]))
+                start_pos, end_pos = pans[i]
+                x_map = {"left": 0.3, "center": 0.5, "right": 0.7}
+                y_map = {"top": 0.3, "center": 0.5, "bottom": 0.7}
+                clip = clip.set_position(lambda t: (
+                    x_map[start_pos] + (t / durations[i]) * (x_map[end_pos] - x_map[start_pos]),
+                    y_map.get(start_pos, 0.5) + (t / durations[i]) * (y_map.get(end_pos, 0.5) - y_map.get(start_pos, 0.5))
+                ))
+                clips.append(clip)
+                current_time += durations[i]
 
-    # Headline Font Size
-    st.sidebar.subheader("Text Styles")
-    headline_font_size = st.sidebar.slider("Headline Size", 10, 72, 36)
+            bg = ColorClip(size=size, color=(8, 12, 30), duration=duration)
+            video = CompositeVideoClip([bg] + clips)
 
-    # ---------------------------------------------------------
-    #  8.  DYNAMIC DIMENSIONS
-    # ---------------------------------------------------------
-    DPI = 300
-    MM_TO_PX = DPI / 25.4
-    def mm_to_px(mm: float) -> int:
-        return int(mm * MM_TO_PX)
+            # Hook (model name)
+            hook = TextClip(model.upper(), fontsize=100, color="white", font="Arial-Black")
+            hook = hook.set_position("center").set_start(0.5).set_duration(4).fadein(1).fadeout(1)
 
-    w_px, h_px = mm_to_px(PAGE_MM[0]), mm_to_px(PAGE_MM[1])
+            # Specs
+            specs_clip = TextClip("\n".join(specs.split("\n")), fontsize=50, color="#FFD700", align="center")
+            specs_clip = specs_clip.set_position("center").set_start(3).set_duration(4).fadein(1.2)
 
-    # ---------------------------------------------------------
-    #  9.  CANVAS CREATION
-    # ---------------------------------------------------------
-    canvas = Image.new("RGBA", (w_px, h_px), BACKGROUND_COLOUR)
+            # CTA (price, location, phone, text)
+            cta_lines = [f"From {price}", location, phone, cta_text]
+            cta_clip = TextClip("\n".join(cta_lines), fontsize=65, color="white", font="Arial-Bold", align="center")
+            cta_clip = cta_clip.set_position("center").set_start(7).set_duration(3).fadein(0.8)
 
-    # background (fit to page)
-    bg = ImageOps.fit(bg_img, (w_px, h_px), centering=(0.5, 0.5))
-    canvas.paste(bg, (0, 0), bg)
+            # Logo
+            logo_clip = ImageClip(np.array(logo_img.convert("RGBA"))).resize(height=120).set_duration(duration)
+            logo_clip = logo_clip.set_position(("center", "bottom")).margin(bottom=50, opacity=0).fadein(1)
 
-    # ---------------------------------------------------------
-    #  10. PRODUCT IMAGE HANDLING
-    # ---------------------------------------------------------
-    if images:
-        # Use the first uploaded image as the main product image
-        main_product_image = images[0]
+            # Social icons in CTA
+            wa_clip = ImageClip(np.array(whatsapp_img)).resize(width=100).set_duration(3).set_start(7)
+            wa_clip = wa_clip.set_position((0.35, 0.85), relative=True)
+            tt_clip = ImageClip(np.array(tiktok_img)).resize(width=100).set_duration(3).set_start(7)
+            tt_clip = tt_clip.set_position((0.65, 0.85), relative=True)
 
-        prod_w = int(w_px * (product_width_percent / 100))
-        prod_h = int(h_px * (product_height_percent / 100))
-        prod = ImageOps.fit(main_product_image, (prod_w, prod_h), centering=(0.5, 0.5))
-        shadow = prod.filter(ImageFilter.GaussianBlur(8))
-        offset = mm_to_px(2)
-        canvas.paste(shadow, ((w_px - prod_w) // 2 + product_x_offset + offset, (h_px - prod_h) // 2 + product_y_offset + offset), shadow)
-        canvas.paste(prod, ((w_px - prod_w) // 2 + product_x_offset, (h_px - prod_h) // 2 + product_y_offset), prod)
+            video = CompositeVideoClip([video, hook, specs_clip, cta_clip, logo_clip, wa_clip, tt_clip], size=size)
 
-    # ---------------------------------------------------------
-    #  11. SIGNATURE
-    # ---------------------------------------------------------
-    if sig_img:
-        sign = sig_img.resize((int(sig_img.width * 0.20), int(sig_img.height * 0.20)))
-        canvas.paste(sign, (w_px - sign.width - mm_to_px(15), h_px - sign.height - mm_to_px(15)), sign)
+            # Music
+            music = AudioFileClip(music_path).subclip(0, duration).volumex(0.35)  # Perfect volume balance
+            video = video.set_audio(music)
 
-    # ---------------------------------------------------------
-    #  12. TEXT GENERATION & DRAWING
-    # ---------------------------------------------------------
-    draw = ImageDraw.Draw(canvas)
-    try:
-        font = ImageFont.truetype("arial.ttf", size=headline_font_size)
-    except IOError:
-        font = ImageFont.load_default()
+            # Export
+            video_bytes = io.BytesIO()
+            video.write_videofile(video_bytes, fps=fps, codec="libx264", audio_codec="aac", bitrate="10000k")
+            video_bytes.seek(0)
 
-    # Generate Text from Image
-    if images:
-        if st.button("Generate Text"):
-            ai_text = generate_text_from_image(main_product_image)
-            st.session_state.ai_text = ai_text
-        if 'ai_text' in st.session_state:
-            headline = st.session_state.ai_text
-        else:
-            headline = "Click Generate Text"
-    else:
-        headline = "Upload product image to generate text"
+            st.success("🎉 Premium ad ready with your upbeat music!")
+            st.video(video_bytes)
+            st.download_button("📥 Download MP4", data=video_bytes, file_name=f"CarAndHomesHub_{model.replace(' ', '_')}.mp4", mime="video/mp4")
 
-    header_y = mm_to_px(25)
-    for line in textwrap.wrap(headline, width=25):
-        w, h = font.getbbox(line)[2:4]
-        draw.text(((w_px - w) // 2, header_y), line, font=font, fill="#000000")
-        header_y += h + 5
+            # Cleanup
+            for f in temp_images + [music_path]:
+                if os.path.exists(f):
+                    os.remove(f)
 
-    price = st.text_input("Price", "$49.99")
-    price_y = h_px - mm_to_px(25)
-    draw.text((mm_to_px(20), price_y), price, font=font, fill="#FF0000")
-
-    cta = st.text_input("CTA", "Buy Now")
-    cta_w, cta_h = font.getbbox(cta)[2:4]
-    draw.text((w_px - cta_w - mm_to_px(20), price_y), cta, font=font, fill="#FFFFFF")
-
-    contact = st.text_area("Contact", "hello@example.com\n+1 234 567 890")
-    contact_y = h_px - mm_to_px(10)
-    for line in textwrap.wrap(contact, width=30):
-        w, h = font.getbbox(line)[2:4]
-        draw.text(((w_px - w) // 2, contact_y), line, font=font, fill="#444444")
-        contact_y += h + 4
-
-    # ---------------------------------------------------------
-    #  13. SHOW PREVIEW
-    # ---------------------------------------------------------
-    st.image(canvas, use_column_width=True, caption="Preview – A4 210×297 mm")
-
-    # ---------------------------------------------------------
-    #  14. EXPORT
-    # ---------------------------------------------------------
-    if st.button("Generate JPEG"):
-        out = canvas.convert("RGB")
-        buf = io.BytesIO()
-        out.save(buf, format="JPEG", quality=90, dpi=(300, 300))
-        st.download_button("💾 Download", buf.getvalue(), "journal.jpg", "image/jpeg")
-
-    log("----  render complete  ----")
-
-# ---------------------------------------------------------
-#  15. IF ANYTHING CRASHES – SHOW IT
-# ---------------------------------------------------------
-except Exception as e:
-    st.error("⚠️  Unhandled exception")
-    st.code(traceback.format_exc())
-    print(traceback.format_exc())
-    sys.exit(1)
+st.caption("© Car & Homes Hub • Professional 10s ads for social media")
